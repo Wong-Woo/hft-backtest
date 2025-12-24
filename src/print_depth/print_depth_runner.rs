@@ -17,31 +17,55 @@ use hftbacktest::{
     prelude::{Bot, HashMapMarketDepth},
     depth::MarketDepth,
 };
+use std::path::PathBuf;
 
 use crate::display::OrderBookDisplay;
 use crate::config::{TICK_SIZE, LOT_SIZE};
+use crate::common::DataLoader;
 
-/// 백테스팅 실행을 담당하는 구조체 (Single Responsibility Principle)
-pub struct BacktestRunner {
-    data_file: String,
+/// Depth 출력을 담당하는 구조체 (Single Responsibility Principle)
+pub struct PrintDepthRunner {
+    data_files: Vec<PathBuf>,
     display: OrderBookDisplay,
 }
 
-impl BacktestRunner {
-    pub fn new(data_file: String, display: OrderBookDisplay) -> Self {
-        Self { data_file, display }
+impl PrintDepthRunner {
+    pub fn new(data_pattern: String, display: OrderBookDisplay) -> Result<Self> {
+        let data_files = DataLoader::load_files(&data_pattern)?;
+        
+        Ok(Self { 
+            data_files,
+            display 
+        })
     }
 
-    /// Run backtesting and display order book
+    /// Print depth for all matched files
     pub fn run(&self) -> Result<()> {
-        println!("Loading data from: {}", self.data_file);
+        for (file_idx, data_file) in self.data_files.iter().enumerate() {
+            println!("\n{}", "=".repeat(60));
+            println!("Processing file [{}/{}]: {}", 
+                     file_idx + 1, 
+                     self.data_files.len(), 
+                     data_file.display());
+            println!("{}\n", "=".repeat(60));
+            
+            self.run_single_file(data_file.to_str().unwrap())?;
+        }
+        
+        println!("\n✅ All files processed successfully!");
+        Ok(())
+    }
+    
+    /// Print depth for a single file
+    fn run_single_file(&self, data_file: &str) -> Result<()> {
+        println!("Loading data from: {}", data_file);
 
-        // Setup and create backtester
-        let mut hbt = self.create_backtest()?;
+        // Setup and create depth reader
+        let mut hbt = self.create_backtest(data_file)?;
 
-        println!("Backtesting started...\n");
+        println!("Print depth started...\n");
 
-        // Run full day backtest
+        // Read market data
         let mut update_count = 0;
         let mut display_count = 0;
         let elapse_duration = 100_000_000; // Check every 100ms
@@ -93,14 +117,14 @@ impl BacktestRunner {
                     }
                 }
                 Err(_) => {
-                    println!("\nEnd of backtest data reached!");
+                    println!("\nEnd of data reached!");
                     break;
                 }
             }
         }
 
         let total_elapsed = start_time.elapsed();
-        println!("\n=== Backtest Complete! ===");
+        println!("\n=== Print Complete! ===");
         println!("Total updates: {}", update_count);
         println!("Total displays: {}", display_count);
         println!("Elapsed time: {:.2}s", total_elapsed.as_secs_f64());
@@ -109,8 +133,8 @@ impl BacktestRunner {
         Ok(())
     }
 
-    /// Create backtest instance (Dependency Inversion Principle)
-    fn create_backtest(&self) -> Result<Backtest<HashMapMarketDepth>> {
+    /// Create depth reader instance (Dependency Inversion Principle)
+    fn create_backtest(&self, data_file: &str) -> Result<Backtest<HashMapMarketDepth>> {
         // Latency model: constant latency (entry: 100us, response: 100us)
         let latency_model = ConstantLatency::new(100_000, 100_000);
         
@@ -126,7 +150,7 @@ impl BacktestRunner {
         let hbt = Backtest::builder()
             .add_asset(
                 L2AssetBuilder::new()
-                    .data(vec![DataSource::File(self.data_file.clone())])
+                    .data(vec![DataSource::File(data_file.to_string())])
                     .latency_model(latency_model)
                     .asset_type(asset_type)
                     .fee_model(fee_model)

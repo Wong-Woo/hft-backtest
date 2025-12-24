@@ -1,0 +1,6 @@
+exchange,symbol,timestamp,local_timestamp,is_snapshot,side,price,amount
+binance-futures,BTCUSDT,1719360001028000,1719360002229358,true,ask,61777.9,5.57
+binance-futures,BTCUSDT,1719360001028000,1719360002229358,true,ask,61778.2,0.003
+binance-futures,BTCUSDT,1719360001028000,1719360002229358,true,ask,61778.5,0.002
+binance-futures,BTCUSDT,1719360001028000,1719360002229358,true,ask,61778.8,0.003
+
