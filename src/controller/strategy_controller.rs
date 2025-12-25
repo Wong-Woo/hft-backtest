@@ -14,7 +14,7 @@ pub struct StrategyController {
     state: Arc<AtomicU64>, // Using u64 to store ControlState as integer
     /// Should stop flag
     should_stop: Arc<AtomicBool>,
-    /// Should skip current file flag
+    /// Should skip flag
     should_skip: Arc<AtomicBool>,
     /// Speed multiplier (stored as f64 bits in u64)
     speed_multiplier: Arc<AtomicU64>,
@@ -55,6 +55,12 @@ impl StrategyController {
     /// Check if should stop
     pub fn should_stop(&self) -> bool {
         self.should_stop.load(Ordering::Relaxed)
+    }
+
+    /// Signal to stop execution
+    pub fn stop(&self) {
+        self.state.store(ControlState::Stopped as u64, Ordering::Relaxed);
+        self.should_stop.store(true, Ordering::Relaxed);
     }
 
     /// Check if should skip current file
@@ -110,8 +116,7 @@ impl StrategyController {
                 let _ = self.response_tx.send(ControlResponse::SpeedChanged(clamped_speed));
             }
             StrategyCommand::ChangeFiles(files) => {
-                // Notify about file change - actual implementation would require
-                // restarting the strategy with new files
+                // For now, just notify. Actual file change would require restarting
                 let _ = self.response_tx.send(ControlResponse::FilesChanged(files));
             }
             StrategyCommand::Skip => {

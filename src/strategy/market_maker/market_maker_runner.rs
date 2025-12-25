@@ -8,7 +8,7 @@ use hftbacktest::{
 };
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
 use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
 use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, COMMAND_POLL_TIMEOUT_MICROS};
@@ -70,9 +70,6 @@ impl MarketMakerRunner {
                 break;
             }
             
-            // Reset skip flag for new file
-            controller.reset_skip();
-            
             let data_file = self.data_files[file_idx].clone();
             
             println!("\n{}", "=".repeat(60));
@@ -87,12 +84,6 @@ impl MarketMakerRunner {
                 &sender,
                 &controller,
             )?;
-            
-            // Check if skipped to next file
-            if controller.should_skip() {
-                println!("\n⏭️  Skipping to next file...");
-                continue;
-            }
         }
         
         if !controller.should_stop() {
@@ -147,6 +138,8 @@ impl MarketMakerRunner {
 
         println!("Waiting for market data...\n");
 
+        let mut last_gui_update = Instant::now();
+
         loop {
             // Process commands (non-blocking)
             controller.process_commands(Duration::from_micros(COMMAND_POLL_TIMEOUT_MICROS));
@@ -157,16 +150,10 @@ impl MarketMakerRunner {
                 break;
             }
             
-            // Check for skip signal
-            if controller.should_skip() {
-                println!("\n⏭️  Skipping to next file...");
-                break;
-            }
-            
             // Handle pause state
             if !controller.is_running() {
                 controller.wait_while_paused();
-                if controller.should_stop() || controller.should_skip() {
+                if controller.should_stop() {
                     break;
                 }
                 continue;
@@ -209,22 +196,25 @@ impl MarketMakerRunner {
                         // Process orders and refill
                         self.check_and_refill_orders(&mut hbt, &mut inventory, &mut realized_pnl)?;
                         
-                        // Send data to GUI
-                        let depth_for_data = hbt.depth(0);
-                        let mid_price = calculate_mid_price(depth_for_data);
-                        let unrealized_pnl = inventory * (mid_price - initial_price);
-                        let position_value = inventory * mid_price;
-                        
-                        if let Err(e) = sender.send(PerformanceData {
-                            timestamp: update_count as f64,
-                            equity: cash + realized_pnl + position_value,
-                            realized_pnl,
-                            unrealized_pnl,
-                            position: inventory,
-                            mid_price,
-                            strategy_name: "Market Making".to_string(),
-                        }) {
-                            eprintln!("Warning: Failed to send performance data: {}", e);
+                        // Send data to GUI (throttled to ~30 FPS)
+                        if last_gui_update.elapsed() >= Duration::from_millis(33) {
+                            let depth_for_data = hbt.depth(0);
+                            let mid_price = calculate_mid_price(depth_for_data);
+                            let unrealized_pnl = inventory * (mid_price - initial_price);
+                            let position_value = inventory * mid_price;
+                            
+                            if let Err(e) = sender.send(PerformanceData {
+                                timestamp: update_count as f64,
+                                equity: cash + realized_pnl + position_value,
+                                realized_pnl,
+                                unrealized_pnl,
+                                position: inventory,
+                                mid_price,
+                                strategy_name: "Market Making".to_string(),
+                            }) {
+                                eprintln!("Warning: Failed to send performance data: {}", e);
+                            }
+                            last_gui_update = Instant::now();
                         }
                     }
                 }
