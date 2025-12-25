@@ -14,6 +14,8 @@ pub struct StrategyController {
     state: Arc<AtomicU64>, // Using u64 to store ControlState as integer
     /// Should stop flag
     should_stop: Arc<AtomicBool>,
+    /// Should skip current file flag
+    should_skip: Arc<AtomicBool>,
     /// Speed multiplier (stored as f64 bits in u64)
     speed_multiplier: Arc<AtomicU64>,
 }
@@ -28,6 +30,7 @@ impl StrategyController {
             response_tx,
             state: Arc::new(AtomicU64::new(ControlState::Paused as u64)),
             should_stop: Arc::new(AtomicBool::new(false)),
+            should_skip: Arc::new(AtomicBool::new(false)),
             speed_multiplier: Arc::new(AtomicU64::new(1.0f64.to_bits())),
         }
     }
@@ -52,6 +55,16 @@ impl StrategyController {
     /// Check if should stop
     pub fn should_stop(&self) -> bool {
         self.should_stop.load(Ordering::Relaxed)
+    }
+
+    /// Check if should skip current file
+    pub fn should_skip(&self) -> bool {
+        self.should_skip.load(Ordering::Relaxed)
+    }
+
+    /// Reset skip flag
+    pub fn reset_skip(&self) {
+        self.should_skip.store(false, Ordering::Relaxed);
     }
 
     /// Check if currently running
@@ -101,9 +114,14 @@ impl StrategyController {
                 // restarting the strategy with new files
                 let _ = self.response_tx.send(ControlResponse::FilesChanged(files));
             }
+            StrategyCommand::Skip => {
+                self.should_skip.store(true, Ordering::Relaxed);
+                let _ = self.response_tx.send(ControlResponse::Skipped);
+            }
             StrategyCommand::Reset => {
                 self.state.store(ControlState::Paused as u64, Ordering::Relaxed);
                 self.should_stop.store(false, Ordering::Relaxed);
+                self.should_skip.store(false, Ordering::Relaxed);
                 self.speed_multiplier.store(1.0f64.to_bits(), Ordering::Relaxed);
                 let _ = self.response_tx.send(ControlResponse::StateChanged(ControlState::Paused));
             }

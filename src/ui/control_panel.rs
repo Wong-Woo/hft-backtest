@@ -84,6 +84,7 @@ impl ControlPanel {
                 let can_start = matches!(self.current_state, ControlState::Paused | ControlState::Stopped);
                 let can_pause = self.current_state == ControlState::Running;
                 let can_stop = !matches!(self.current_state, ControlState::Stopped | ControlState::Completed);
+                let can_skip = self.current_state == ControlState::Running && self.file_paths.len() > 1;
                 
                 if ui.add_enabled(can_start, egui::Button::new("▶ Start")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::Start);
@@ -95,6 +96,10 @@ impl ControlPanel {
                 
                 if ui.add_enabled(can_stop, egui::Button::new("⏹ Stop")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::Stop);
+                }
+                
+                if ui.add_enabled(can_skip, egui::Button::new("⏭️ Skip")).clicked() {
+                    let _ = self.command_tx.send(StrategyCommand::Skip);
                 }
                 
                 if ui.button("🔄 Reset").clicked() {

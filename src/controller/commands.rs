@@ -11,6 +11,8 @@ pub enum StrategyCommand {
     SetSpeed(f64),
     /// Change data files (supports multiple files for continuous backtesting)
     ChangeFiles(Vec<String>),
+    /// Skip current file and move to next (for multi-file backtesting)
+    Skip,
     /// Reset strategy state
     Reset,
 }
@@ -24,6 +26,8 @@ pub enum ControlResponse {
     SpeedChanged(f64),
     /// Files changed
     FilesChanged(Vec<String>),
+    /// Skipped to next file
+    Skipped,
     /// Error occurred
     Error(String),
     /// Strategy completed

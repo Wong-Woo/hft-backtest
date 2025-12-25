@@ -80,6 +80,9 @@ impl MomentumRunner {
                 break;
             }
             
+            // Reset skip flag for new file
+            controller.reset_skip();
+            
             let data_file = self.data_files[file_idx].clone();
             
             println!("\n{}", "=".repeat(60));
@@ -94,6 +97,12 @@ impl MomentumRunner {
                 &sender,
                 &controller,
             )?;
+            
+            // Check if skipped to next file
+            if controller.should_skip() {
+                println!("\n⏭️  Skipping to next file...");
+                continue;
+            }
         }
         
         if !controller.should_stop() {
@@ -160,10 +169,16 @@ impl MomentumRunner {
                 break;
             }
             
+            // Check for skip signal
+            if controller.should_skip() {
+                println!("\n⏭️  Skipping to next file...");
+                break;
+            }
+            
             // Handle pause state
             if !controller.is_running() {
                 controller.wait_while_paused();
-                if controller.should_stop() {
+                if controller.should_stop() || controller.should_skip() {
                     break;
                 }
                 continue;

@@ -89,6 +89,9 @@ impl PerformanceMonitor {
                 ControlResponse::FilesChanged(files) => {
                     self.control_panel.update_files(files);
                 }
+                ControlResponse::Skipped => {
+                    // File skipped, controller will handle moving to next file
+                }
                 ControlResponse::Error(err) => {
                     eprintln!("Control error: {}", err);
                 }
