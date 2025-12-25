@@ -7,10 +7,13 @@ use hftbacktest::{
     depth::MarketDepth,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 use crossbeam_channel::Sender;
 use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
 use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL};
-use crate::monitor::PerformanceData;
+use crate::ui::PerformanceData;
+use crate::controller::StrategyController;
 use super::{MicroPriceCalculator, OrderBookImbalance, SpreadCalculator,
     RiskManager, OrderTracker, OrderSide};
 
@@ -53,7 +56,46 @@ impl MarketMakerRunner {
         })
     }
 
-    /// GUI 모니터와 함께 전략 실행
+    /// GUI 모니터와 Controller와 함께 전략 실행
+    pub fn run_with_controller(
+        &mut self,
+        sender: Sender<PerformanceData>,
+        controller: Arc<StrategyController>,
+    ) -> Result<()> {
+        let file_count = self.data_files.len();
+        
+        for file_idx in 0..file_count {
+            if controller.should_stop() {
+                println!("\n⏹ Strategy stopped by user");
+                break;
+            }
+            
+            let data_file = self.data_files[file_idx].clone();
+            
+            println!("\n{}", "=".repeat(60));
+            println!("Running strategy on file [{}/{}]: {}", 
+                     file_idx + 1, 
+                     file_count, 
+                     data_file.display());
+            println!("{}\n", "=".repeat(60));
+            
+            self.run_strategy_with_control(
+                data_file.to_str().unwrap(),
+                &sender,
+                &controller,
+            )?;
+        }
+        
+        if !controller.should_stop() {
+            controller.mark_completed();
+            println!("\n✅ All files processed successfully!");
+        }
+        
+        Ok(())
+    }
+
+    /// GUI 모니터와 함께 전략 실행 (이전 버전, 하위 호환성)
+    #[allow(dead_code)]
     pub fn run_with_monitor(&mut self, sender: Sender<PerformanceData>) -> Result<()> {
         let file_count = self.data_files.len();
         
@@ -71,6 +113,121 @@ impl MarketMakerRunner {
         }
         
         println!("\n✅ All files processed successfully!");
+        Ok(())
+    }
+
+    /// 단일 파일에 대한 전략 실행 (Controller 사용)
+    fn run_strategy_with_control(
+        &mut self,
+        data_file: &str,
+        sender: &Sender<PerformanceData>,
+        controller: &StrategyController,
+    ) -> Result<()> {
+        println!("Loading data from: {}", data_file);
+
+        let mut hbt = self.create_backtest(data_file)?;
+        
+        println!("Market making strategy started...\n");
+
+        let mut inventory = 0.0;
+        let mut realized_pnl = 0.0;
+        let cash = self.initial_capital;
+        let mut initial_price = 0.0;
+        let mut update_count = 0;
+        let mut initial_orders_placed = false;
+
+        println!("Waiting for market data...\n");
+
+        loop {
+            // 명령 처리 (non-blocking)
+            controller.process_commands(Duration::from_micros(1));
+            
+            // 정지 명령 확인
+            if controller.should_stop() {
+                println!("\n⏹ Strategy stopped by user");
+                break;
+            }
+            
+            // 일시정지 상태 처리
+            if !controller.is_running() {
+                controller.wait_while_paused();
+                if controller.should_stop() {
+                    break;
+                }
+                continue;
+            }
+            
+            // 속도 조절
+            let speed = controller.speed_multiplier();
+            let adjusted_duration = (ELAPSE_DURATION_NS as f64 / speed) as i64;
+            
+            match hbt.elapse(adjusted_duration) {
+                Ok(_) => {
+                    let depth = hbt.depth(0);
+                    
+                    if !is_valid_depth(depth) {
+                        continue;
+                    }
+
+                    update_count += 1;
+                    
+                    if initial_price == 0.0 {
+                        initial_price = calculate_mid_price(depth);
+                        println!("Initial price set: {:.2}\n", initial_price);
+                        
+                        let _ = depth;
+                        self.place_initial_orders(&mut hbt)?;
+                        initial_orders_placed = true;
+                        continue;
+                    }
+                    
+                    if !initial_orders_placed {
+                        let _ = depth;
+                        self.place_initial_orders(&mut hbt)?;
+                        initial_orders_placed = true;
+                        continue;
+                    }
+                    
+                    if update_count % UPDATE_INTERVAL == 0 {
+                        let _ = depth;
+                        
+                        // 주문 처리 및 보충
+                        self.check_and_refill_orders(&mut hbt, &mut inventory, &mut realized_pnl)?;
+                        
+                        // GUI로 데이터 전송
+                        let depth_for_data = hbt.depth(0);
+                        let mid_price = calculate_mid_price(depth_for_data);
+                        let unrealized_pnl = inventory * (mid_price - initial_price);
+                        let position_value = inventory * mid_price;
+                        
+                        let _ = sender.send(PerformanceData {
+                            timestamp: update_count as f64,
+                            equity: cash + realized_pnl + position_value,
+                            realized_pnl,
+                            unrealized_pnl,
+                            position: inventory,
+                            mid_price,
+                            strategy_name: "Market Making".to_string(),
+                        });
+                    }
+                }
+                Err(_) => {
+                    println!("\nEnd of data reached!");
+                    break;
+                }
+            }
+        }
+
+        let final_depth = hbt.depth(0);
+        
+        self.print_final_stats(
+            inventory,
+            realized_pnl,
+            cash,
+            initial_price,
+            final_depth,
+        );
+
         Ok(())
     }
 

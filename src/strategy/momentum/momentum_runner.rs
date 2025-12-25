@@ -7,10 +7,13 @@ use hftbacktest::{
     depth::MarketDepth,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 use crossbeam_channel::Sender;
 use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
 use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, PRINT_INTERVAL};
-use crate::monitor::PerformanceData;
+use crate::ui::PerformanceData;
+use crate::controller::StrategyController;
 use super::{MomentumIndicator, SignalType};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,7 +66,46 @@ impl MomentumRunner {
         })
     }
 
-    /// GUI 모니터와 함께 전략 실행
+    /// GUI 모니터와 Controller와 함께 전략 실행
+    pub fn run_with_controller(
+        &mut self,
+        sender: Sender<PerformanceData>,
+        controller: Arc<StrategyController>,
+    ) -> Result<()> {
+        let file_count = self.data_files.len();
+        
+        for file_idx in 0..file_count {
+            if controller.should_stop() {
+                println!("\n⏹ Strategy stopped by user");
+                break;
+            }
+            
+            let data_file = self.data_files[file_idx].clone();
+            
+            println!("\n{}", "=".repeat(60));
+            println!("Running momentum strategy on file [{}/{}]: {}", 
+                     file_idx + 1, 
+                     file_count, 
+                     data_file.display());
+            println!("{}\n", "=".repeat(60));
+            
+            self.run_strategy_with_control(
+                data_file.to_str().unwrap(),
+                &sender,
+                &controller,
+            )?;
+        }
+        
+        if !controller.should_stop() {
+            controller.mark_completed();
+            println!("\n✅ All files processed successfully!");
+        }
+        
+        Ok(())
+    }
+
+    /// GUI 모니터와 함께 전략 실행 (이전 버전, 하위 호환성)
+    #[allow(dead_code)]
     pub fn run_with_monitor(&mut self, sender: Sender<PerformanceData>) -> Result<()> {
         let file_count = self.data_files.len();
         
@@ -81,6 +123,119 @@ impl MomentumRunner {
         }
         
         println!("\n✅ All files processed successfully!");
+        Ok(())
+    }
+
+    /// 단일 파일에 대한 전략 실행 (Controller 사용)
+    fn run_strategy_with_control(
+        &mut self,
+        data_file: &str,
+        sender: &Sender<PerformanceData>,
+        controller: &StrategyController,
+    ) -> Result<()> {
+        println!("Loading data from: {}", data_file);
+
+        let mut hbt = self.create_backtest(data_file)?;
+        
+        println!("Momentum strategy started...\n");
+
+        let mut realized_pnl = 0.0;
+        let cash = self.initial_capital;
+        let mut update_count = 0;
+
+        println!("Waiting for market data...\n");
+
+        // 포지션 상태 초기화
+        self.position_state = PositionState::Flat;
+        self.entry_price = 0.0;
+        self.position_qty = 0.0;
+
+        loop {
+            // 명령 처리 (non-blocking)
+            controller.process_commands(Duration::from_micros(1));
+            
+            // 정지 명령 확인
+            if controller.should_stop() {
+                println!("\n⏹ Strategy stopped by user");
+                break;
+            }
+            
+            // 일시정지 상태 처리
+            if !controller.is_running() {
+                controller.wait_while_paused();
+                if controller.should_stop() {
+                    break;
+                }
+                continue;
+            }
+            
+            // 속도 조절
+            let speed = controller.speed_multiplier();
+            let adjusted_duration = (ELAPSE_DURATION_NS as f64 / speed) as i64;
+            
+            match hbt.elapse(adjusted_duration) {
+                Ok(_) => {
+                    let depth = hbt.depth(0);
+                    
+                    if !is_valid_depth(depth) {
+                        continue;
+                    }
+
+                    update_count += 1;
+                    
+                    let mid_price = calculate_mid_price(depth);
+                    
+                    // 모멘텀 지표 업데이트
+                    self.momentum_indicator.update(mid_price);
+
+                    if update_count % UPDATE_INTERVAL == 0 {
+                        // 전략 로직 실행
+                        self.execute_strategy(&mut hbt, &mut realized_pnl)?;
+                        
+                        // GUI로 데이터 전송
+                        let depth_for_data = hbt.depth(0);
+                        let mid_price = calculate_mid_price(depth_for_data);
+                        
+                        let (position_value, unrealized_pnl) = self.calculate_position_metrics(mid_price);
+                        
+                        let _ = sender.send(PerformanceData {
+                            timestamp: update_count as f64,
+                            equity: cash + realized_pnl + position_value,
+                            realized_pnl,
+                            unrealized_pnl,
+                            position: self.position_qty,
+                            mid_price,
+                            strategy_name: "Momentum".to_string(),
+                        });
+                        
+                        // 상태 출력
+                        if update_count % PRINT_INTERVAL == 0 {
+                            let depth_for_print = hbt.depth(0);
+                            self.print_status(
+                                update_count, 
+                                realized_pnl, 
+                                cash,
+                                depth_for_print
+                            );
+                        }
+                    }
+                }
+                Err(_) => {
+                    println!("\nEnd of data reached!");
+                    break;
+                }
+            }
+        }
+
+        // 포지션이 남아있으면 청산
+        if self.position_state != PositionState::Flat {
+            println!("\nClosing remaining position...");
+            let _ = self.close_position(&mut hbt, &mut realized_pnl)?;
+        }
+
+        let final_depth = hbt.depth(0);
+        self.print_final_stats(realized_pnl, cash, final_depth);
+
         Ok(())
     }
 
