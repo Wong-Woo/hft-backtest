@@ -9,8 +9,8 @@ pub enum StrategyCommand {
     Stop,
     /// Change execution speed (multiplier: 0.1 = 10x slower, 10.0 = 10x faster)
     SetSpeed(f64),
-    /// Change data file
-    ChangeFile(String),
+    /// Change data files (supports multiple files for continuous backtesting)
+    ChangeFiles(Vec<String>),
     /// Reset strategy state
     Reset,
 }
@@ -22,8 +22,8 @@ pub enum ControlResponse {
     StateChanged(ControlState),
     /// Speed changed
     SpeedChanged(f64),
-    /// File changed
-    FileChanged(String),
+    /// Files changed
+    FilesChanged(Vec<String>),
     /// Error occurred
     Error(String),
     /// Strategy completed

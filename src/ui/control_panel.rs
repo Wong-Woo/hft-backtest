@@ -1,13 +1,14 @@
 use eframe::egui;
 use crossbeam_channel::Sender;
 use crate::controller::{StrategyCommand, ControlState};
+use std::path::PathBuf;
 
 /// Control panel for strategy execution
 pub struct ControlPanel {
     command_tx: Sender<StrategyCommand>,
     current_state: ControlState,
     speed_multiplier: f64,
-    file_path: String,
+    file_paths: Vec<String>,
 }
 
 impl ControlPanel {
@@ -16,7 +17,7 @@ impl ControlPanel {
             command_tx,
             current_state: ControlState::Paused,
             speed_multiplier: 1.0,
-            file_path: initial_file,
+            file_paths: vec![initial_file],
         }
     }
 
@@ -26,6 +27,34 @@ impl ControlPanel {
 
     pub fn update_speed(&mut self, speed: f64) {
         self.speed_multiplier = speed;
+    }
+
+    pub fn update_files(&mut self, files: Vec<String>) {
+        self.file_paths = files;
+    }
+
+    fn select_files(&mut self) {
+        // Open file dialog in a separate thread to avoid blocking UI
+        let command_tx = self.command_tx.clone();
+        
+        std::thread::spawn(move || {
+            if let Some(files) = rfd::FileDialog::new()
+                .add_filter("NPZ Data Files", &["npz"])
+                .add_filter("CSV Data Files", &["csv"])
+                .add_filter("All Files", &["*"])
+                .set_title("Select Backtest Data Files (Multiple Selection Supported)")
+                .pick_files()
+            {
+                let file_paths: Vec<String> = files
+                    .iter()
+                    .filter_map(|p| p.to_str().map(|s| s.to_string()))
+                    .collect();
+                
+                if !file_paths.is_empty() {
+                    let _ = command_tx.send(StrategyCommand::ChangeFiles(file_paths));
+                }
+            }
+        });
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui) {
@@ -115,14 +144,46 @@ impl ControlPanel {
             
             ui.separator();
             
-            // File info
-            ui.horizontal(|ui| {
-                ui.label("📁 Data File:");
-                ui.label(
-                    egui::RichText::new(&self.file_path)
-                        .small()
-                        .monospace()
-                );
+            // File selection and info
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label("📁 Data Files:");
+                    if ui.button("📂 Select Files...").clicked() {
+                        self.select_files();
+                    }
+                });
+                
+                // Display selected files
+                if self.file_paths.is_empty() {
+                    ui.label(egui::RichText::new("No files selected").italics().weak());
+                } else {
+                    ui.group(|ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                for (idx, file_path) in self.file_paths.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{}.", idx + 1));
+                                        ui.label(
+                                            egui::RichText::new(
+                                                PathBuf::from(file_path)
+                                                    .file_name()
+                                                    .and_then(|n| n.to_str())
+                                                    .unwrap_or(file_path)
+                                            )
+                                            .small()
+                                            .monospace()
+                                        );
+                                    });
+                                }
+                            });
+                        ui.label(
+                            egui::RichText::new(format!("Total: {} file(s)", self.file_paths.len()))
+                                .small()
+                                .weak()
+                        );
+                    });
+                }
             });
         });
     }

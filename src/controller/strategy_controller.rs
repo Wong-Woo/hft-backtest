@@ -96,9 +96,10 @@ impl StrategyController {
                 self.speed_multiplier.store(clamped_speed.to_bits(), Ordering::Relaxed);
                 let _ = self.response_tx.send(ControlResponse::SpeedChanged(clamped_speed));
             }
-            StrategyCommand::ChangeFile(file) => {
-                // For now, just notify. Actual file change would require restarting
-                let _ = self.response_tx.send(ControlResponse::FileChanged(file));
+            StrategyCommand::ChangeFiles(files) => {
+                // Notify about file change - actual implementation would require
+                // restarting the strategy with new files
+                let _ = self.response_tx.send(ControlResponse::FilesChanged(files));
             }
             StrategyCommand::Reset => {
                 self.state.store(ControlState::Paused as u64, Ordering::Relaxed);

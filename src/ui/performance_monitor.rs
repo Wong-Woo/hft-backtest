@@ -86,8 +86,8 @@ impl PerformanceMonitor {
                 ControlResponse::SpeedChanged(speed) => {
                     self.control_panel.update_speed(speed);
                 }
-                ControlResponse::FileChanged(_file) => {
-                    // Handle file change if needed
+                ControlResponse::FilesChanged(files) => {
+                    self.control_panel.update_files(files);
                 }
                 ControlResponse::Error(err) => {
                     eprintln!("Control error: {}", err);
