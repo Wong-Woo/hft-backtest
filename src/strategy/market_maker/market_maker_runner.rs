@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use crossbeam_channel::Sender;
 use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
-use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL};
+use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, COMMAND_POLL_TIMEOUT_MICROS};
 use crate::ui::PerformanceData;
 use crate::controller::StrategyController;
 use super::{MicroPriceCalculator, OrderBookImbalance, SpreadCalculator,
@@ -56,7 +56,7 @@ impl MarketMakerRunner {
         })
     }
 
-    /// GUI 모니터와 Controller와 함께 전략 실행
+    /// Run strategy with GUI monitor and Controller
     pub fn run_with_controller(
         &mut self,
         sender: Sender<PerformanceData>,
@@ -94,7 +94,7 @@ impl MarketMakerRunner {
         Ok(())
     }
 
-    /// GUI 모니터와 함께 전략 실행 (이전 버전, 하위 호환성)
+    /// Run strategy with GUI monitor (legacy version, for backward compatibility)
     #[allow(dead_code)]
     pub fn run_with_monitor(&mut self, sender: Sender<PerformanceData>) -> Result<()> {
         let file_count = self.data_files.len();
@@ -116,7 +116,7 @@ impl MarketMakerRunner {
         Ok(())
     }
 
-    /// 단일 파일에 대한 전략 실행 (Controller 사용)
+    /// Run strategy on a single file (with Controller)
     fn run_strategy_with_control(
         &mut self,
         data_file: &str,
@@ -139,16 +139,16 @@ impl MarketMakerRunner {
         println!("Waiting for market data...\n");
 
         loop {
-            // 명령 처리 (non-blocking)
-            controller.process_commands(Duration::from_micros(1));
+            // Process commands (non-blocking)
+            controller.process_commands(Duration::from_micros(COMMAND_POLL_TIMEOUT_MICROS));
             
-            // 정지 명령 확인
+            // Check for stop signal
             if controller.should_stop() {
                 println!("\n⏹ Strategy stopped by user");
                 break;
             }
             
-            // 일시정지 상태 처리
+            // Handle pause state
             if !controller.is_running() {
                 controller.wait_while_paused();
                 if controller.should_stop() {
@@ -157,7 +157,7 @@ impl MarketMakerRunner {
                 continue;
             }
             
-            // 속도 조절
+            // Speed adjustment
             let speed = controller.speed_multiplier();
             let adjusted_duration = (ELAPSE_DURATION_NS as f64 / speed) as i64;
             
@@ -191,16 +191,16 @@ impl MarketMakerRunner {
                     if update_count % UPDATE_INTERVAL == 0 {
                         let _ = depth;
                         
-                        // 주문 처리 및 보충
+                        // Process orders and refill
                         self.check_and_refill_orders(&mut hbt, &mut inventory, &mut realized_pnl)?;
                         
-                        // GUI로 데이터 전송
+                        // Send data to GUI
                         let depth_for_data = hbt.depth(0);
                         let mid_price = calculate_mid_price(depth_for_data);
                         let unrealized_pnl = inventory * (mid_price - initial_price);
                         let position_value = inventory * mid_price;
                         
-                        let _ = sender.send(PerformanceData {
+                        if let Err(e) = sender.send(PerformanceData {
                             timestamp: update_count as f64,
                             equity: cash + realized_pnl + position_value,
                             realized_pnl,
@@ -208,7 +208,9 @@ impl MarketMakerRunner {
                             position: inventory,
                             mid_price,
                             strategy_name: "Market Making".to_string(),
-                        });
+                        }) {
+                            eprintln!("Warning: Failed to send performance data: {}", e);
+                        }
                     }
                 }
                 Err(_) => {
@@ -231,7 +233,7 @@ impl MarketMakerRunner {
         Ok(())
     }
 
-    /// 단일 파일에 대한 전략 실행
+    /// Run strategy on a single file
     fn run_strategy(&mut self, data_file: &str, sender: Option<&Sender<PerformanceData>>) -> Result<()> {
         println!("Loading data from: {}", data_file);
 
@@ -280,14 +282,14 @@ impl MarketMakerRunner {
                         let _ = depth;
                         self.check_and_refill_orders(&mut hbt, &mut inventory, &mut realized_pnl)?;
                         
-                        // GUI로 데이터 전송
+                        // Send data to GUI
                         if let Some(sender) = sender {
                             let depth_for_data = hbt.depth(0);
                             let mid_price = calculate_mid_price(depth_for_data);
                             let inventory_value = inventory * mid_price;
                             let unrealized_pnl = inventory * (mid_price - initial_price);
                             
-                            let _ = sender.send(PerformanceData {
+                            if let Err(e) = sender.send(PerformanceData {
                                 timestamp: update_count as f64,
                                 equity: cash + realized_pnl + inventory_value,
                                 realized_pnl,
@@ -295,7 +297,9 @@ impl MarketMakerRunner {
                                 position: inventory,
                                 mid_price,
                                 strategy_name: "Market Making".to_string(),
-                            });
+                            }) {
+                                eprintln!("Warning: Failed to send performance data: {}", e);
+                            }
                         }
                         
                         let depth_for_print = hbt.depth(0);

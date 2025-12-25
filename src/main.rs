@@ -6,7 +6,7 @@ mod ui;
 
 use anyhow::Result;
 use config::{
-    DATA_FILE_PATH, INITIAL_CAPITAL,
+    get_data_file_path, INITIAL_CAPITAL,
     MOMENTUM_LOOKBACK_PERIOD, MOMENTUM_THRESHOLD, MOMENTUM_POSITION_SIZE,
     MOMENTUM_STOP_LOSS_PCT, MOMENTUM_TAKE_PROFIT_PCT,
 };
@@ -46,19 +46,22 @@ fn run_momentum_with_gui() -> Result<()> {
     println!("  Stop Loss: {:.2}%", MOMENTUM_STOP_LOSS_PCT * 100.0);
     println!("  Take Profit: {:.2}%\n", MOMENTUM_TAKE_PROFIT_PCT * 100.0);
 
-    // 채널 생성
+    let data_file_path = get_data_file_path();
+
+    // Create channels for communication
     let (data_tx, data_rx) = unbounded();
     let (cmd_tx, cmd_rx) = unbounded();
     let (response_tx, response_rx) = unbounded();
 
-    // Controller 생성
+    // Create controller
     let controller = Arc::new(StrategyController::new(cmd_rx, response_tx.clone()));
     let controller_clone = Arc::clone(&controller);
 
-    // 전략을 별도 스레드에서 실행
+    // Run strategy in separate thread
+    let data_file_clone = data_file_path.clone();
     let strategy_thread = thread::spawn(move || -> Result<()> {
         let mut runner = MomentumRunner::new(
-            DATA_FILE_PATH.to_string(),
+            data_file_clone,
             MOMENTUM_LOOKBACK_PERIOD,
             MOMENTUM_THRESHOLD,
             MOMENTUM_POSITION_SIZE,
@@ -70,20 +73,20 @@ fn run_momentum_with_gui() -> Result<()> {
         Ok(())
     });
 
-    // 메인 스레드에서 GUI 실행
+    // Run GUI in main thread
     let gui_result = launch_monitor(
         data_rx,
         response_rx,
         cmd_tx,
         INITIAL_CAPITAL,
         "Momentum",
-        DATA_FILE_PATH.to_string(),
+        data_file_path,
     );
 
-    // GUI 종료 시 전략도 종료하도록 Stop 명령 전송
+    // Signal stop to strategy when GUI closes
     let _ = controller.should_stop();
 
-    // 전략 스레드 종료 대기
+    // Wait for strategy thread to finish
     let _ = strategy_thread.join();
 
     gui_result
@@ -109,19 +112,22 @@ fn run_market_maker_with_gui() -> Result<()> {
     println!("  Depth Levels: {}", DEPTH_LEVELS);
     println!("  Order Layers: {}\n", ORDER_LAYERS);
 
-    // 채널 생성
+    let data_file_path = get_data_file_path();
+
+    // Create channels for communication
     let (data_tx, data_rx) = unbounded();
     let (cmd_tx, cmd_rx) = unbounded();
     let (response_tx, response_rx) = unbounded();
 
-    // Controller 생성
+    // Create controller
     let controller = Arc::new(StrategyController::new(cmd_rx, response_tx.clone()));
     let controller_clone = Arc::clone(&controller);
 
-    // 전략을 별도 스레드에서 실행
+    // Run strategy in separate thread
+    let data_file_clone = data_file_path.clone();
     let strategy_thread = thread::spawn(move || -> Result<()> {
         let mut runner = MarketMakerRunner::new(
-            DATA_FILE_PATH.to_string(),
+            data_file_clone,
             GAMMA,
             INITIAL_KAPPA,
             MAX_INVENTORY,
@@ -135,20 +141,20 @@ fn run_market_maker_with_gui() -> Result<()> {
         Ok(())
     });
 
-    // 메인 스레드에서 GUI 실행
+    // Run GUI in main thread
     let gui_result = launch_monitor(
         data_rx,
         response_rx,
         cmd_tx,
         INITIAL_CAPITAL,
         "Market Making",
-        DATA_FILE_PATH.to_string(),
+        data_file_path,
     );
 
-    // GUI 종료 시 전략도 종료하도록 Stop 명령 전송
+    // Signal stop to strategy when GUI closes
     let _ = controller.should_stop();
 
-    // 전략 스레드 종료 대기
+    // Wait for strategy thread to finish
     let _ = strategy_thread.join();
 
     gui_result

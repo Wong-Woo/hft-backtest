@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use crossbeam_channel::Sender;
 use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
-use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, PRINT_INTERVAL};
+use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, PRINT_INTERVAL, COMMAND_POLL_TIMEOUT_MICROS};
 use crate::ui::PerformanceData;
 use crate::controller::StrategyController;
 use super::{MomentumIndicator, SignalType};
@@ -66,7 +66,7 @@ impl MomentumRunner {
         })
     }
 
-    /// GUI 모니터와 Controller와 함께 전략 실행
+    /// Run strategy with GUI monitor and Controller
     pub fn run_with_controller(
         &mut self,
         sender: Sender<PerformanceData>,
@@ -104,7 +104,7 @@ impl MomentumRunner {
         Ok(())
     }
 
-    /// GUI 모니터와 함께 전략 실행 (이전 버전, 하위 호환성)
+    /// Run strategy with GUI monitor (legacy version, for backward compatibility)
     #[allow(dead_code)]
     pub fn run_with_monitor(&mut self, sender: Sender<PerformanceData>) -> Result<()> {
         let file_count = self.data_files.len();
@@ -126,7 +126,7 @@ impl MomentumRunner {
         Ok(())
     }
 
-    /// 단일 파일에 대한 전략 실행 (Controller 사용)
+    /// Run strategy on a single file (with Controller)
     fn run_strategy_with_control(
         &mut self,
         data_file: &str,
@@ -145,22 +145,22 @@ impl MomentumRunner {
 
         println!("Waiting for market data...\n");
 
-        // 포지션 상태 초기화
+        // Initialize position state
         self.position_state = PositionState::Flat;
         self.entry_price = 0.0;
         self.position_qty = 0.0;
 
         loop {
-            // 명령 처리 (non-blocking)
-            controller.process_commands(Duration::from_micros(1));
+            // Process commands (non-blocking)
+            controller.process_commands(Duration::from_micros(COMMAND_POLL_TIMEOUT_MICROS));
             
-            // 정지 명령 확인
+            // Check for stop signal
             if controller.should_stop() {
                 println!("\n⏹ Strategy stopped by user");
                 break;
             }
             
-            // 일시정지 상태 처리
+            // Handle pause state
             if !controller.is_running() {
                 controller.wait_while_paused();
                 if controller.should_stop() {
@@ -169,7 +169,7 @@ impl MomentumRunner {
                 continue;
             }
             
-            // 속도 조절
+            // Speed adjustment
             let speed = controller.speed_multiplier();
             let adjusted_duration = (ELAPSE_DURATION_NS as f64 / speed) as i64;
             
@@ -185,20 +185,20 @@ impl MomentumRunner {
                     
                     let mid_price = calculate_mid_price(depth);
                     
-                    // 모멘텀 지표 업데이트
+                    // Update momentum indicator
                     self.momentum_indicator.update(mid_price);
 
                     if update_count % UPDATE_INTERVAL == 0 {
-                        // 전략 로직 실행
+                        // Execute strategy logic
                         self.execute_strategy(&mut hbt, &mut realized_pnl)?;
                         
-                        // GUI로 데이터 전송
+                        // Send data to GUI
                         let depth_for_data = hbt.depth(0);
                         let mid_price = calculate_mid_price(depth_for_data);
                         
                         let (position_value, unrealized_pnl) = self.calculate_position_metrics(mid_price);
                         
-                        let _ = sender.send(PerformanceData {
+                        if let Err(e) = sender.send(PerformanceData {
                             timestamp: update_count as f64,
                             equity: cash + realized_pnl + position_value,
                             realized_pnl,
@@ -206,9 +206,11 @@ impl MomentumRunner {
                             position: self.position_qty,
                             mid_price,
                             strategy_name: "Momentum".to_string(),
-                        });
+                        }) {
+                            eprintln!("Warning: Failed to send performance data: {}", e);
+                        }
                         
-                        // 상태 출력
+                        // Print status
                         if update_count % PRINT_INTERVAL == 0 {
                             let depth_for_print = hbt.depth(0);
                             self.print_status(
@@ -239,7 +241,7 @@ impl MomentumRunner {
         Ok(())
     }
 
-    /// 단일 파일에 대한 전략 실행
+    /// Run strategy on a single file
     fn run_strategy(&mut self, data_file: &str, sender: Option<&Sender<PerformanceData>>) -> Result<()> {
         println!("Loading data from: {}", data_file);
 
@@ -253,7 +255,7 @@ impl MomentumRunner {
 
         println!("Waiting for market data...\n");
 
-        // 포지션 상태 초기화
+        // Initialize position state
         self.position_state = PositionState::Flat;
         self.entry_price = 0.0;
         self.position_qty = 0.0;
@@ -271,23 +273,23 @@ impl MomentumRunner {
                     
                     let mid_price = calculate_mid_price(depth);
                     
-                    // 모멘텀 지표 업데이트
+                    // Update momentum indicator
                     self.momentum_indicator.update(mid_price);
 
                     if update_count % UPDATE_INTERVAL == 0 {
                         let _ = depth;
                         
-                        // 전략 로직 실행
+                        // Execute strategy logic
                         self.execute_strategy(&mut hbt, &mut realized_pnl)?;
                         
-                        // GUI로 데이터 전송
+                        // Send data to GUI
                         if let Some(sender) = sender {
                             let depth_for_data = hbt.depth(0);
                             let mid_price = calculate_mid_price(depth_for_data);
                             
                             let (position_value, unrealized_pnl) = self.calculate_position_metrics(mid_price);
                             
-                            let _ = sender.send(PerformanceData {
+                            if let Err(e) = sender.send(PerformanceData {
                                 timestamp: update_count as f64,
                                 equity: cash + realized_pnl + position_value,
                                 realized_pnl,
@@ -295,7 +297,9 @@ impl MomentumRunner {
                                 position: self.position_qty,
                                 mid_price,
                                 strategy_name: "Momentum".to_string(),
-                            });
+                            }) {
+                                eprintln!("Warning: Failed to send performance data: {}", e);
+                            }
                         }
                         
                         // 상태 출력

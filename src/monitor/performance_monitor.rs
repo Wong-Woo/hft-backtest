@@ -3,7 +3,7 @@ use egui_plot::{Line, Plot, PlotPoints, Legend, Corner};
 use crossbeam_channel::Receiver;
 use std::collections::VecDeque;
 
-/// 성능 데이터 구조체
+/// Performance data structure
 #[derive(Debug, Clone)]
 pub struct PerformanceData {
     pub timestamp: f64,
@@ -15,7 +15,7 @@ pub struct PerformanceData {
     pub strategy_name: String,
 }
 
-/// GUI 모니터 애플리케이션
+/// GUI monitor application
 pub struct PerformanceMonitor {
     receiver: Receiver<PerformanceData>,
     equity_history: VecDeque<(f64, f64)>,
@@ -44,17 +44,17 @@ impl PerformanceMonitor {
     }
 
     fn update_data(&mut self) {
-        // 채널에서 모든 대기 중인 데이터 수신
+        // Receive all pending data from channel
         while let Ok(data) = self.receiver.try_recv() {
             let timestamp = data.timestamp;
             
-            // 데이터 히스토리 업데이트
+            // Update data history
             self.equity_history.push_back((timestamp, data.equity));
             self.pnl_history.push_back((timestamp, data.realized_pnl + data.unrealized_pnl));
             self.position_history.push_back((timestamp, data.position));
             self.price_history.push_back((timestamp, data.mid_price));
             
-            // 최대 포인트 수 제한
+            // Limit maximum number of points
             if self.equity_history.len() > self.max_points {
                 self.equity_history.pop_front();
                 self.pnl_history.pop_front();
@@ -74,7 +74,7 @@ impl PerformanceMonitor {
             ui.heading(format!("📊 {} Strategy Monitor", data.strategy_name));
             ui.separator();
             
-            // 메인 통계
+            // Main statistics
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label("💰 Equity");
@@ -108,7 +108,7 @@ impl PerformanceMonitor {
             
             ui.separator();
             
-            // 상세 통계
+            // Detailed statistics
             ui.horizontal(|ui| {
                 ui.group(|ui| {
                     ui.vertical(|ui| {
@@ -167,7 +167,7 @@ impl PerformanceMonitor {
                         .width(2.0)
                 );
                 
-                // 초기 자본 기준선
+                // Initial capital baseline
                 if !self.equity_history.is_empty() {
                     let start = self.equity_history.front().unwrap().0;
                     let end = self.equity_history.back().unwrap().0;
@@ -203,7 +203,7 @@ impl PerformanceMonitor {
                         .width(2.0)
                 );
                 
-                // 제로 라인
+                // Zero line
                 if !self.pnl_history.is_empty() {
                     let start = self.pnl_history.front().unwrap().0;
                     let end = self.pnl_history.back().unwrap().0;
@@ -238,7 +238,7 @@ impl PerformanceMonitor {
                         .width(2.0)
                 );
                 
-                // 제로 라인
+                // Zero line
                 if !self.position_history.is_empty() {
                     let start = self.position_history.front().unwrap().0;
                     let end = self.position_history.back().unwrap().0;
@@ -312,13 +312,13 @@ impl PerformanceMonitor {
 
 impl eframe::App for PerformanceMonitor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 데이터 업데이트
+        // Update data
         self.update_data();
         
-        // UI 지속적으로 갱신
+        // Continuously refresh UI
         ctx.request_repaint();
         
-        // 상단 패널 - 설정 버튼
+        // Top panel - Settings button
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("📊 HFT Backtest Monitor");
@@ -330,7 +330,7 @@ impl eframe::App for PerformanceMonitor {
             });
         });
         
-        // 설정 패널 (사이드 패널)
+        // Settings panel (side panel)
         if self.show_settings {
             egui::SidePanel::right("settings_panel")
                 .default_width(300.0)
@@ -341,34 +341,34 @@ impl eframe::App for PerformanceMonitor {
         
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                // 통계 패널
+                // Statistics panel
                 self.render_stats(ui);
                 
                 ui.separator();
                 
-                // Equity 차트
+                // Equity chart
                 self.render_equity_chart(ui);
                 
                 ui.separator();
                 
-                // PnL 차트
+                // PnL chart
                 self.render_pnl_chart(ui);
                 
                 ui.separator();
                 
-                // Position 차트
+                // Position chart
                 self.render_position_chart(ui);
                 
                 ui.separator();
                 
-                // Price 차트
+                // Price chart
                 self.render_price_chart(ui);
             });
         });
     }
 }
 
-/// 모니터 윈도우 실행 함수
+/// Launch monitor window function
 pub fn launch_monitor(
     receiver: Receiver<PerformanceData>,
     initial_equity: f64,
