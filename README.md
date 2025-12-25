@@ -14,6 +14,9 @@ src/
 │   └── order_book_display.rs
 ├── print_depth/           # 오더북 출력 모드
 │   └── print_depth_runner.rs
+├── monitor/               # GUI 성능 모니터
+│   ├── mod.rs
+│   └── performance_monitor.rs
 └── strategy/              # 전략 구현
     ├── market_maker/      # Market Making 전략
     │   ├── market_maker_runner.rs  # 전략 실행
@@ -44,6 +47,19 @@ cargo run market-maker    # 긴 명령어
 ```bash
 cargo run momentum        # 모멘텀 기반 전략
 ```
+
+### 4. GUI 모니터와 함께 실행 🖥️
+```bash
+cargo run mm-gui              # Market Making + GUI
+cargo run market-maker-gui    # Market Making + GUI
+cargo run momentum-gui        # Momentum + GUI
+```
+
+GUI 모니터에서 실시간으로 확인 가능:
+- 📈 Equity Curve (자본 곡선)
+- 💰 Total PnL (실현/미실현 손익)
+- 📊 Position (포지션 크기)
+- 💹 Mid Price (중간가)
 
 ## 전략 구성 요소 (SOLID Principles)
 
@@ -199,3 +215,14 @@ Running strategy on file [1/1]: ...
 - `hftbacktest`: 백테스팅 프레임워크
 - `anyhow`: 에러 처리
 - `glob`: 파일 패턴 매칭
+- `eframe`: egui 프레임워크 (GUI)
+- `egui`: 즉각적인 모드 GUI 라이브러리
+- `egui_plot`: egui 플롯/차트 위젯
+- `crossbeam-channel`: 스레드 간 통신용 채널
+
+## 기술 스택
+
+- **백테스팅**: hftbacktest (고성능 HFT 시뮬레이션)
+- **GUI**: egui (즉각적 모드 GUI, 크로스 플랫폼)
+- **멀티스레딩**: 별도 스레드에서 GUI 실행, 채널로 데이터 통신
+- **시각화**: egui_plot (실시간 차트 렌더링)

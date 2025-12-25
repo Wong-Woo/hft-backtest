@@ -7,8 +7,10 @@ use hftbacktest::{
     depth::MarketDepth,
 };
 use std::path::PathBuf;
-use crate::common::DataLoader;
-use crate::config::{TICK_SIZE, LOT_SIZE};
+use crossbeam_channel::Sender;
+use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
+use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, PRINT_INTERVAL};
+use crate::monitor::PerformanceData;
 use super::{MomentumIndicator, SignalType};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -21,7 +23,9 @@ enum PositionState {
 pub struct MomentumRunner {
     data_files: Vec<PathBuf>,
     momentum_indicator: MomentumIndicator,
+    #[allow(dead_code)]
     lookback_period: usize,
+    #[allow(dead_code)]
     momentum_threshold: f64,
     position_size: f64,
     stop_loss_pct: f64,
@@ -59,8 +63,8 @@ impl MomentumRunner {
         })
     }
 
-    /// 전략 실행
-    pub fn run(&mut self) -> Result<()> {
+    /// GUI 모니터와 함께 전략 실행
+    pub fn run_with_monitor(&mut self, sender: Sender<PerformanceData>) -> Result<()> {
         let file_count = self.data_files.len();
         
         for file_idx in 0..file_count {
@@ -73,7 +77,7 @@ impl MomentumRunner {
                      data_file.display());
             println!("{}\n", "=".repeat(60));
             
-            self.run_strategy(data_file.to_str().unwrap())?;
+            self.run_strategy(data_file.to_str().unwrap(), Some(&sender))?;
         }
         
         println!("\n✅ All files processed successfully!");
@@ -81,7 +85,7 @@ impl MomentumRunner {
     }
 
     /// 단일 파일에 대한 전략 실행
-    fn run_strategy(&mut self, data_file: &str) -> Result<()> {
+    fn run_strategy(&mut self, data_file: &str, sender: Option<&Sender<PerformanceData>>) -> Result<()> {
         println!("Loading data from: {}", data_file);
 
         let mut hbt = self.create_backtest(data_file)?;
@@ -90,8 +94,6 @@ impl MomentumRunner {
 
         let mut realized_pnl = 0.0;
         let cash = self.initial_capital;
-        let elapse_duration = 100_000_000;
-        let update_interval = 10;
         let mut update_count = 0;
 
         println!("Waiting for market data...\n");
@@ -102,30 +104,47 @@ impl MomentumRunner {
         self.position_qty = 0.0;
 
         loop {
-            match hbt.elapse(elapse_duration) {
+            match hbt.elapse(ELAPSE_DURATION_NS) {
                 Ok(_) => {
                     let depth = hbt.depth(0);
                     
-                    if depth.best_bid_tick() == i64::MIN || depth.best_ask_tick() == i64::MAX {
+                    if !is_valid_depth(depth) {
                         continue;
                     }
 
                     update_count += 1;
                     
-                    let tick_size = depth.tick_size();
-                    let mid_price = (depth.best_bid_tick() as f64 + depth.best_ask_tick() as f64) / 2.0 * tick_size;
+                    let mid_price = calculate_mid_price(depth);
                     
                     // 모멘텀 지표 업데이트
                     self.momentum_indicator.update(mid_price);
 
-                    if update_count % update_interval == 0 {
+                    if update_count % UPDATE_INTERVAL == 0 {
                         let _ = depth;
                         
                         // 전략 로직 실행
                         self.execute_strategy(&mut hbt, &mut realized_pnl)?;
                         
+                        // GUI로 데이터 전송
+                        if let Some(sender) = sender {
+                            let depth_for_data = hbt.depth(0);
+                            let mid_price = calculate_mid_price(depth_for_data);
+                            
+                            let (position_value, unrealized_pnl) = self.calculate_position_metrics(mid_price);
+                            
+                            let _ = sender.send(PerformanceData {
+                                timestamp: update_count as f64,
+                                equity: cash + realized_pnl + position_value,
+                                realized_pnl,
+                                unrealized_pnl,
+                                position: self.position_qty,
+                                mid_price,
+                                strategy_name: "Momentum".to_string(),
+                            });
+                        }
+                        
                         // 상태 출력
-                        if update_count % 100 == 0 {
+                        if update_count % PRINT_INTERVAL == 0 {
                             let depth_for_print = hbt.depth(0);
                             self.print_status(
                                 update_count, 
@@ -168,8 +187,7 @@ impl MomentumRunner {
         }
 
         let depth = hbt.depth(0);
-        let tick_size = depth.tick_size();
-        let mid_price = (depth.best_bid_tick() as f64 + depth.best_ask_tick() as f64) / 2.0 * tick_size;
+        let mid_price = calculate_mid_price(depth);
 
         // 청산 조건 확인
         if self.position_state != PositionState::Flat {
@@ -371,6 +389,23 @@ impl MomentumRunner {
         self.position_qty = 0.0;
 
         Ok(())
+    }
+
+    /// 포지션 메트릭 계산 (position_value, unrealized_pnl)
+    fn calculate_position_metrics(&self, mid_price: f64) -> (f64, f64) {
+        match self.position_state {
+            PositionState::Long => {
+                let position_value = self.position_qty * mid_price;
+                let unrealized_pnl = (mid_price - self.entry_price) * self.position_qty;
+                (position_value, unrealized_pnl)
+            }
+            PositionState::Short => {
+                let position_value = -self.position_qty * mid_price;
+                let unrealized_pnl = (self.entry_price - mid_price) * self.position_qty;
+                (position_value, unrealized_pnl)
+            }
+            PositionState::Flat => (0.0, 0.0),
+        }
     }
 
     fn should_close_position(&self, current_price: f64) -> bool {

@@ -7,8 +7,10 @@ use hftbacktest::{
     depth::MarketDepth,
 };
 use std::path::PathBuf;
-use crate::common::DataLoader;
-use crate::config::{TICK_SIZE, LOT_SIZE};
+use crossbeam_channel::Sender;
+use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
+use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL};
+use crate::monitor::PerformanceData;
 use super::{MicroPriceCalculator, OrderBookImbalance, SpreadCalculator,
     RiskManager, OrderTracker, OrderSide};
 
@@ -51,8 +53,8 @@ impl MarketMakerRunner {
         })
     }
 
-    /// 전략 실행
-    pub fn run(&mut self) -> Result<()> {
+    /// GUI 모니터와 함께 전략 실행
+    pub fn run_with_monitor(&mut self, sender: Sender<PerformanceData>) -> Result<()> {
         let file_count = self.data_files.len();
         
         for file_idx in 0..file_count {
@@ -65,7 +67,7 @@ impl MarketMakerRunner {
                      data_file.display());
             println!("{}\n", "=".repeat(60));
             
-            self.run_strategy(data_file.to_str().unwrap())?;
+            self.run_strategy(data_file.to_str().unwrap(), Some(&sender))?;
         }
         
         println!("\n✅ All files processed successfully!");
@@ -73,7 +75,7 @@ impl MarketMakerRunner {
     }
 
     /// 단일 파일에 대한 전략 실행
-    fn run_strategy(&mut self, data_file: &str) -> Result<()> {
+    fn run_strategy(&mut self, data_file: &str, sender: Option<&Sender<PerformanceData>>) -> Result<()> {
         println!("Loading data from: {}", data_file);
 
         let mut hbt = self.create_backtest(data_file)?;
@@ -84,29 +86,24 @@ impl MarketMakerRunner {
         let mut realized_pnl = 0.0;
         let cash = self.initial_capital;
         let mut initial_price = 0.0;
-        let elapse_duration = 100_000_000;
-        let update_interval = 10;
         let mut update_count = 0;
         let mut initial_orders_placed = false;
 
         println!("Waiting for market data...\n");
 
         loop {
-            match hbt.elapse(elapse_duration) {
+            match hbt.elapse(ELAPSE_DURATION_NS) {
                 Ok(_) => {
                     let depth = hbt.depth(0);
                     
-                    if depth.best_bid_tick() == i64::MIN || depth.best_ask_tick() == i64::MAX {
+                    if !is_valid_depth(depth) {
                         continue;
                     }
 
                     update_count += 1;
                     
                     if initial_price == 0.0 {
-                        let tick_size = depth.tick_size();
-                        let best_bid = depth.best_bid_tick() as f64 * tick_size;
-                        let best_ask = depth.best_ask_tick() as f64 * tick_size;
-                        initial_price = (best_bid + best_ask) / 2.0;
+                        initial_price = calculate_mid_price(depth);
                         println!("Initial price set: {:.2}\n", initial_price);
                         
                         let _ = depth;
@@ -122,13 +119,31 @@ impl MarketMakerRunner {
                         continue;
                     }
 
-                    if update_count % update_interval == 0 {
+                    if update_count % UPDATE_INTERVAL == 0 {
                         let _ = depth;
                         self.check_and_refill_orders(&mut hbt, &mut inventory, &mut realized_pnl)?;
                         
+                        // GUI로 데이터 전송
+                        if let Some(sender) = sender {
+                            let depth_for_data = hbt.depth(0);
+                            let mid_price = calculate_mid_price(depth_for_data);
+                            let inventory_value = inventory * mid_price;
+                            let unrealized_pnl = inventory * (mid_price - initial_price);
+                            
+                            let _ = sender.send(PerformanceData {
+                                timestamp: update_count as f64,
+                                equity: cash + realized_pnl + inventory_value,
+                                realized_pnl,
+                                unrealized_pnl,
+                                position: inventory,
+                                mid_price,
+                                strategy_name: "Market Making".to_string(),
+                            });
+                        }
+                        
                         let depth_for_print = hbt.depth(0);
                         self.print_status(
-                            update_count, 
+                            update_count as u64, 
                             inventory, 
                             realized_pnl, 
                             cash,

@@ -60,6 +60,7 @@ impl MomentumIndicator {
     }
 
     /// 평균 수익률 계산
+    #[allow(dead_code)]
     pub fn calculate_average_return(&self) -> Option<f64> {
         if self.returns_history.is_empty() {
             return None;
@@ -96,6 +97,7 @@ impl MomentumIndicator {
     }
 
     /// 가격 변동성 계산 (표준편차)
+    #[allow(dead_code)]
     pub fn calculate_volatility(&self) -> Option<f64> {
         if self.returns_history.len() < 2 {
             return None;

@@ -2,8 +2,10 @@ use std::collections::VecDeque;
 
 pub struct RiskManager {
     pub max_inventory: f64,
+    #[allow(dead_code)]
     volatility_threshold: f64,
     price_history: VecDeque<f64>,
+    #[allow(dead_code)]
     volatility_window: usize,
 }
 
@@ -17,10 +19,12 @@ impl RiskManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_position_safe(&self, inventory: f64) -> bool {
         inventory.abs() < self.max_inventory
     }
 
+    #[allow(dead_code)]
     pub fn update_price(&mut self, price: f64) {
         if self.price_history.len() >= self.volatility_window {
             self.price_history.pop_front();
@@ -42,6 +46,7 @@ impl RiskManager {
         variance.sqrt()
     }
 
+    #[allow(dead_code)]
     pub fn detect_toxic_flow(&self) -> bool {
         let volatility = self.calculate_volatility();
         volatility > self.volatility_threshold

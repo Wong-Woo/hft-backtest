@@ -11,10 +11,13 @@ pub struct OrderTracker {
 
 #[derive(Debug, Clone)]
 pub struct OrderInfo {
+    #[allow(dead_code)]
     pub order_id: u64,
     pub side: OrderSide,
+    #[allow(dead_code)]
     pub price: f64,
     pub qty: f64,
+    #[allow(dead_code)]
     pub layer: usize,
 }
 
@@ -72,11 +75,13 @@ impl OrderTracker {
     }
 
     /// 주문 존재 확인
+    #[allow(dead_code)]
     pub fn has_order(&self, order_id: u64) -> bool {
         self.active_orders.contains_key(&order_id)
     }
 
     /// 모든 주문 제거
+    #[allow(dead_code)]
     pub fn clear_all(&mut self) {
         self.active_orders.clear();
     }
