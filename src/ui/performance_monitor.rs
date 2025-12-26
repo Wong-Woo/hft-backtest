@@ -59,6 +59,7 @@ pub struct PerformanceMonitor {
     initial_equity: f64,
     show_settings: bool,
     orderbook_depth_levels: usize,
+    data_updated: bool,
 }
 
 impl PerformanceMonitor {
@@ -87,12 +88,16 @@ impl PerformanceMonitor {
             initial_equity,
             show_settings: false,
             orderbook_depth_levels: 10,
+            data_updated: false,
         }
     }
 
     fn update_data(&mut self) {
+        self.data_updated = false;
+        
         // Receive all pending data from channel
         while let Ok(data) = self.data_receiver.try_recv() {
+            self.data_updated = true;
             let timestamp = data.timestamp;
             
             // Avoid processing zero/invalid data after backtest completion
@@ -158,9 +163,12 @@ impl PerformanceMonitor {
                 }
                 ControlResponse::FilesChanged(files) => {
                     self.control_panel.update_files(files);
+                    // Clear chart data when files change
+                    self.clear_chart_data();
                 }
                 ControlResponse::Skipped => {
-                    // File skipped, controller will handle moving to next file
+                    // File skipped, clear data for next file
+                    self.clear_chart_data();
                 }
                 ControlResponse::Error(err) => {
                     eprintln!("Control error: {}", err);
@@ -255,8 +263,26 @@ impl PerformanceMonitor {
         }
     }
 
+    fn clear_chart_data(&mut self) {
+        self.equity_history.clear();
+        self.pnl_history.clear();
+        self.position_history.clear();
+        self.price_history.clear();
+        self.win_rate_history.clear();
+        self.avg_profit_per_trade_history.clear();
+        self.fill_ratio_history.clear();
+        self.position_hold_time_history.clear();
+        self.latency_history.clear();
+        self.data_updated = true; // Trigger repaint after clearing
+    }
+
     fn render_equity_chart(&self, ui: &mut egui::Ui) {
         ui.heading("Equity Curve");
+        
+        if self.equity_history.is_empty() {
+            ui.label("No data available");
+            return;
+        }
         
         let points: PlotPoints = self.equity_history.iter()
             .map(|(t, v)| [*t, *v])
@@ -646,8 +672,10 @@ impl eframe::App for PerformanceMonitor {
         // Update data
         self.update_data();
         
-        // Continuously refresh UI
-        ctx.request_repaint();
+        // Only request repaint if data was updated or UI interaction is needed
+        if self.data_updated {
+            ctx.request_repaint();
+        }
         
         // Top panel - Title and settings button
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
