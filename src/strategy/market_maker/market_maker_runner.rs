@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
 use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
 use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, COMMAND_POLL_TIMEOUT_MICROS};
-use crate::ui::PerformanceData;
+use crate::ui::{PerformanceData, OrderBookLevel};
 use crate::controller::StrategyController;
 use super::{MicroPriceCalculator, OrderBookImbalance, SpreadCalculator,
     RiskManager, OrderTracker, OrderSide};
@@ -27,6 +27,14 @@ pub struct MarketMakerRunner {
     order_size: f64,
     order_layers: usize,
     initial_capital: f64,
+    // Metrics tracking
+    num_trades: usize,
+    winning_trades: usize,
+    total_orders: usize,
+    total_fills: usize,
+    #[allow(dead_code)]
+    position_entry_time: Option<Instant>,
+    total_hold_time: Duration,
 }
 
 impl MarketMakerRunner {
@@ -53,7 +61,54 @@ impl MarketMakerRunner {
             order_size,
             order_layers,
             initial_capital,
+            num_trades: 0,
+            winning_trades: 0,
+            total_orders: 0,
+            total_fills: 0,
+            position_entry_time: None,
+            total_hold_time: Duration::ZERO,
         })
+    }
+    
+    /// Extract order book levels from market depth
+    fn extract_orderbook<MD>(&self, depth: &MD, levels: usize) -> (Vec<OrderBookLevel>, Vec<OrderBookLevel>)
+    where
+        MD: MarketDepth,
+    {
+        let mut bids = Vec::new();
+        let mut asks = Vec::new();
+        
+        let best_bid_tick = depth.best_bid_tick();
+        let best_ask_tick = depth.best_ask_tick();
+        let tick_size = depth.tick_size();
+        
+        if best_bid_tick != i64::MIN {
+            for i in 0..levels {
+                let tick = best_bid_tick - i as i64;
+                let qty = depth.bid_qty_at_tick(tick);
+                if qty > 0.0 {
+                    bids.push(OrderBookLevel {
+                        price: tick as f64 * tick_size,
+                        quantity: qty,
+                    });
+                }
+            }
+        }
+        
+        if best_ask_tick != i64::MAX {
+            for i in 0..levels {
+                let tick = best_ask_tick + i as i64;
+                let qty = depth.ask_qty_at_tick(tick);
+                if qty > 0.0 {
+                    asks.push(OrderBookLevel {
+                        price: tick as f64 * tick_size,
+                        quantity: qty,
+                    });
+                }
+            }
+        }
+        
+        (bids, asks)
     }
 
     /// Run strategy with GUI monitor and Controller
@@ -203,6 +258,13 @@ impl MarketMakerRunner {
                             let unrealized_pnl = inventory * (mid_price - initial_price);
                             let position_value = inventory * mid_price;
                             
+                            let (bids, asks) = self.extract_orderbook(depth_for_data, 10);
+                            let avg_hold_time = if self.num_trades > 0 {
+                                self.total_hold_time.as_secs_f64() / self.num_trades as f64
+                            } else {
+                                0.0
+                            };
+                            
                             if let Err(e) = sender.send(PerformanceData {
                                 timestamp: update_count as f64,
                                 equity: cash + realized_pnl + position_value,
@@ -211,6 +273,14 @@ impl MarketMakerRunner {
                                 position: inventory,
                                 mid_price,
                                 strategy_name: "Market Making".to_string(),
+                                num_trades: self.num_trades,
+                                winning_trades: self.winning_trades,
+                                total_fills: self.total_fills,
+                                total_orders: self.total_orders,
+                                position_hold_time: avg_hold_time,
+                                latency_micros: 100, // Placeholder latency
+                                bids,
+                                asks,
                             }) {
                                 eprintln!("Warning: Failed to send performance data: {}", e);
                             }
@@ -294,6 +364,13 @@ impl MarketMakerRunner {
                             let inventory_value = inventory * mid_price;
                             let unrealized_pnl = inventory * (mid_price - initial_price);
                             
+                            let (bids, asks) = self.extract_orderbook(depth_for_data, 10);
+                            let avg_hold_time = if self.num_trades > 0 {
+                                self.total_hold_time.as_secs_f64() / self.num_trades as f64
+                            } else {
+                                0.0
+                            };
+                            
                             if let Err(e) = sender.send(PerformanceData {
                                 timestamp: update_count as f64,
                                 equity: cash + realized_pnl + inventory_value,
@@ -302,6 +379,14 @@ impl MarketMakerRunner {
                                 position: inventory,
                                 mid_price,
                                 strategy_name: "Market Making".to_string(),
+                                num_trades: self.num_trades,
+                                winning_trades: self.winning_trades,
+                                total_fills: self.total_fills,
+                                total_orders: self.total_orders,
+                                position_hold_time: avg_hold_time,
+                                latency_micros: 100, // Placeholder latency
+                                bids,
+                                asks,
                             }) {
                                 eprintln!("Warning: Failed to send performance data: {}", e);
                             }

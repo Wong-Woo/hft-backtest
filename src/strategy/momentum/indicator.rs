@@ -7,7 +7,7 @@ pub enum SignalType {
     Neutral,
 }
 
-/// 모멘텀 지표 계산기
+/// Momentum indicator calculator
 pub struct MomentumIndicator {
     lookback_period: usize,
     price_history: VecDeque<f64>,
@@ -25,7 +25,7 @@ impl MomentumIndicator {
         }
     }
 
-    /// 새로운 가격 업데이트
+    /// Update with new price
     pub fn update(&mut self, price: f64) {
         self.price_history.push_back(price);
         
@@ -33,7 +33,7 @@ impl MomentumIndicator {
             self.price_history.pop_front();
         }
 
-        // 수익률 계산
+        // Calculate returns
         if self.price_history.len() >= 2 {
             let prev_price = self.price_history[self.price_history.len() - 2];
             let current_price = self.price_history[self.price_history.len() - 1];
@@ -47,7 +47,7 @@ impl MomentumIndicator {
         }
     }
 
-    /// 모멘텀 값 계산 (누적 수익률)
+    /// Calculate momentum value (cumulative return)
     pub fn calculate_momentum(&self) -> Option<f64> {
         if self.price_history.len() < 2 {
             return None;
@@ -59,7 +59,7 @@ impl MomentumIndicator {
         Some((last_price - first_price) / first_price)
     }
 
-    /// 평균 수익률 계산
+    /// Calculate average return
     #[allow(dead_code)]
     pub fn calculate_average_return(&self) -> Option<f64> {
         if self.returns_history.is_empty() {
@@ -70,7 +70,7 @@ impl MomentumIndicator {
         Some(sum / self.returns_history.len() as f64)
     }
 
-    /// 모멘텀 신호 생성
+    /// Generate momentum signal
     pub fn generate_signal(&self) -> SignalType {
         let momentum = match self.calculate_momentum() {
             Some(m) => m,
@@ -86,17 +86,17 @@ impl MomentumIndicator {
         }
     }
 
-    /// 준비 상태 확인
+    /// Check if indicator is ready
     pub fn is_ready(&self) -> bool {
         self.price_history.len() >= self.lookback_period
     }
 
-    /// 현재 모멘텀 값 가져오기
+    /// Get current momentum value
     pub fn get_momentum(&self) -> f64 {
         self.calculate_momentum().unwrap_or(0.0)
     }
 
-    /// 가격 변동성 계산 (표준편차)
+    /// Calculate price volatility (standard deviation)
     #[allow(dead_code)]
     pub fn calculate_volatility(&self) -> Option<f64> {
         if self.returns_history.len() < 2 {
@@ -135,7 +135,7 @@ mod tests {
     fn test_signal_generation() {
         let mut indicator = MomentumIndicator::new(5, 0.01);
         
-        // 상승 추세
+        // Upward trend
         for i in 0..6 {
             indicator.update(100.0 + i as f64 * 2.0);
         }

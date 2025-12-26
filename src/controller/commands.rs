@@ -29,6 +29,7 @@ pub enum ControlResponse {
     /// Skipped to next file
     Skipped,
     /// Error occurred
+    #[allow(dead_code)]
     Error(String),
     /// Strategy completed
     Completed,

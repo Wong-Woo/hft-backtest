@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
 use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
 use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, PRINT_INTERVAL, COMMAND_POLL_TIMEOUT_MICROS};
-use crate::ui::PerformanceData;
+use crate::ui::{PerformanceData, OrderBookLevel};
 use crate::controller::StrategyController;
 use super::{MomentumIndicator, SignalType};
 
@@ -37,6 +37,14 @@ pub struct MomentumRunner {
     position_state: PositionState,
     entry_price: f64,
     position_qty: f64,
+    // Metrics tracking
+    num_trades: usize,
+    winning_trades: usize,
+    total_orders: usize,
+    total_fills: usize,
+    #[allow(dead_code)]
+    position_entry_time: Option<Instant>,
+    total_hold_time: Duration,
 }
 
 impl MomentumRunner {
@@ -63,7 +71,54 @@ impl MomentumRunner {
             position_state: PositionState::Flat,
             entry_price: 0.0,
             position_qty: 0.0,
+            num_trades: 0,
+            winning_trades: 0,
+            total_orders: 0,
+            total_fills: 0,
+            position_entry_time: None,
+            total_hold_time: Duration::ZERO,
         })
+    }
+    
+    /// Extract order book levels from market depth
+    fn extract_orderbook<MD>(&self, depth: &MD, levels: usize) -> (Vec<OrderBookLevel>, Vec<OrderBookLevel>)
+    where
+        MD: MarketDepth,
+    {
+        let mut bids = Vec::new();
+        let mut asks = Vec::new();
+        
+        let best_bid_tick = depth.best_bid_tick();
+        let best_ask_tick = depth.best_ask_tick();
+        let tick_size = depth.tick_size();
+        
+        if best_bid_tick != i64::MIN {
+            for i in 0..levels {
+                let tick = best_bid_tick - i as i64;
+                let qty = depth.bid_qty_at_tick(tick);
+                if qty > 0.0 {
+                    bids.push(OrderBookLevel {
+                        price: tick as f64 * tick_size,
+                        quantity: qty,
+                    });
+                }
+            }
+        }
+        
+        if best_ask_tick != i64::MAX {
+            for i in 0..levels {
+                let tick = best_ask_tick + i as i64;
+                let qty = depth.ask_qty_at_tick(tick);
+                if qty > 0.0 {
+                    asks.push(OrderBookLevel {
+                        price: tick as f64 * tick_size,
+                        quantity: qty,
+                    });
+                }
+            }
+        }
+        
+        (bids, asks)
     }
 
     /// Run strategy with GUI monitor and Controller
@@ -200,6 +255,12 @@ impl MomentumRunner {
                             let mid_price = calculate_mid_price(depth_for_data);
                             
                             let (position_value, unrealized_pnl) = self.calculate_position_metrics(mid_price);
+                            let (bids, asks) = self.extract_orderbook(depth_for_data, 10);
+                            let avg_hold_time = if self.num_trades > 0 {
+                                self.total_hold_time.as_secs_f64() / self.num_trades as f64
+                            } else {
+                                0.0
+                            };
                             
                             if let Err(e) = sender.send(PerformanceData {
                                 timestamp: update_count as f64,
@@ -209,6 +270,14 @@ impl MomentumRunner {
                                 position: self.position_qty,
                                 mid_price,
                                 strategy_name: "Momentum".to_string(),
+                                num_trades: self.num_trades,
+                                winning_trades: self.winning_trades,
+                                total_fills: self.total_fills,
+                                total_orders: self.total_orders,
+                                position_hold_time: avg_hold_time,
+                                latency_micros: 100, // Placeholder latency
+                                bids,
+                                asks,
                             }) {
                                 eprintln!("Warning: Failed to send performance data: {}", e);
                             }
@@ -293,6 +362,12 @@ impl MomentumRunner {
                             let mid_price = calculate_mid_price(depth_for_data);
                             
                             let (position_value, unrealized_pnl) = self.calculate_position_metrics(mid_price);
+                            let (bids, asks) = self.extract_orderbook(depth_for_data, 10);
+                            let avg_hold_time = if self.num_trades > 0 {
+                                self.total_hold_time.as_secs_f64() / self.num_trades as f64
+                            } else {
+                                0.0
+                            };
                             
                             if let Err(e) = sender.send(PerformanceData {
                                 timestamp: update_count as f64,
@@ -302,12 +377,20 @@ impl MomentumRunner {
                                 position: self.position_qty,
                                 mid_price,
                                 strategy_name: "Momentum".to_string(),
+                                num_trades: self.num_trades,
+                                winning_trades: self.winning_trades,
+                                total_fills: self.total_fills,
+                                total_orders: self.total_orders,
+                                position_hold_time: avg_hold_time,
+                                latency_micros: 100, // Placeholder latency
+                                bids,
+                                asks,
                             }) {
                                 eprintln!("Warning: Failed to send performance data: {}", e);
                             }
                         }
                         
-                        // 상태 출력
+                        // Print status
                         if update_count % PRINT_INTERVAL == 0 {
                             let depth_for_print = hbt.depth(0);
                             self.print_status(
@@ -353,7 +436,7 @@ impl MomentumRunner {
         let depth = hbt.depth(0);
         let mid_price = calculate_mid_price(depth);
 
-        // 청산 조건 확인
+        // Check exit conditions (stop-loss or take-profit)
         if self.position_state != PositionState::Flat {
             if self.should_close_position(mid_price) {
                 println!("  Closing position due to stop loss or take profit");
@@ -361,13 +444,13 @@ impl MomentumRunner {
             }
         }
 
-        // 신호 생성
+        // Generate signals based on momentum
         let signal = self.momentum_indicator.generate_signal();
         let momentum_value = self.momentum_indicator.get_momentum();
 
         match self.position_state {
             PositionState::Flat => {
-                // 새 포지션 진입
+                // Enter new position based on signal
                 match signal {
                     SignalType::Long => {
                         println!("  🟢 LONG signal detected | Momentum: {:.4}", momentum_value);
@@ -381,14 +464,14 @@ impl MomentumRunner {
                 }
             }
             PositionState::Long => {
-                // 롱 포지션 중 반대 신호 시 청산
+                // Close long position on opposite signal
                 if signal == SignalType::Short {
                     println!("  ⚠️  Reverse signal detected, closing LONG position");
                     self.close_position(hbt, realized_pnl)?;
                 }
             }
             PositionState::Short => {
-                // 숏 포지션 중 반대 신호 시 청산
+                // Close short position on opposite signal
                 if signal == SignalType::Long {
                     println!("  ⚠️  Reverse signal detected, closing SHORT position");
                     self.close_position(hbt, realized_pnl)?;
@@ -555,7 +638,7 @@ impl MomentumRunner {
         Ok(())
     }
 
-    /// 포지션 메트릭 계산 (position_value, unrealized_pnl)
+    /// Calculate position metrics (position_value, unrealized_pnl)
     fn calculate_position_metrics(&self, mid_price: f64) -> (f64, f64) {
         match self.position_state {
             PositionState::Long => {

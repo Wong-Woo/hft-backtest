@@ -14,6 +14,36 @@ pub fn get_data_file_path() -> String {
 pub const TICK_SIZE: f64 = 0.00001;
 pub const LOT_SIZE: f64 = 0.001;
 
+/// Calculate decimal places needed for TICK_SIZE at compile time
+/// This determines the price precision display (e.g., 0.00001 -> 5 decimal places)
+pub const PRICE_DECIMAL_PLACES: usize = calculate_decimal_places(TICK_SIZE);
+
+/// Calculate the number of decimal places needed for a given tick size
+const fn calculate_decimal_places(tick_size: f64) -> usize {
+    // Convert tick size to determine precision
+    // 0.00001 -> 5, 0.0001 -> 4, 0.001 -> 3, 0.01 -> 2, 0.1 -> 1, 1.0 -> 0
+    
+    // For common tick sizes, use a simple lookup
+    // This is a compile-time constant evaluation
+    if (tick_size - 0.00001).abs() < 1e-10 { 5 }
+    else if (tick_size - 0.0001).abs() < 1e-9 { 4 }
+    else if (tick_size - 0.001).abs() < 1e-8 { 3 }
+    else if (tick_size - 0.01).abs() < 1e-7 { 2 }
+    else if (tick_size - 0.1).abs() < 1e-6 { 1 }
+    else if (tick_size - 1.0).abs() < 1e-5 { 0 }
+    else {
+        // Fallback: calculate from the value
+        // Count decimal places by checking order of magnitude
+        let mut count = 0;
+        let mut value = tick_size;
+        while value < 1.0 && count < 10 {
+            value *= 10.0;
+            count += 1;
+        }
+        count
+    }
+}
+
 // =============================================================================
 // Backtest Execution Parameters
 // =============================================================================

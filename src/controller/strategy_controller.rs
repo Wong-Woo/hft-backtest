@@ -64,11 +64,13 @@ impl StrategyController {
     }
 
     /// Check if should skip current file
+    #[allow(dead_code)]
     pub fn should_skip(&self) -> bool {
         self.should_skip.load(Ordering::Relaxed)
     }
 
     /// Reset skip flag
+    #[allow(dead_code)]
     pub fn reset_skip(&self) {
         self.should_skip.store(false, Ordering::Relaxed);
     }
@@ -147,6 +149,7 @@ impl StrategyController {
     }
 
     /// Get clones for sharing with strategy thread
+    #[allow(dead_code)]
     pub fn get_shared_handles(&self) -> (Arc<AtomicBool>, Arc<AtomicU64>, Arc<AtomicU64>) {
         (
             Arc::clone(&self.should_stop),

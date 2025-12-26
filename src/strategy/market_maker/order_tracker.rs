@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-/// 주문 추적 및 관리 (디버깅 및 PnL 계산용)
+/// Order tracking and management (for debugging and PnL calculation)
 #[derive(Debug)]
 pub struct OrderTracker {
     active_orders: HashMap<u64, OrderInfo>,
