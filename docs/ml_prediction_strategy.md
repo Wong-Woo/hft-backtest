@@ -142,6 +142,15 @@ Total params: 8*32 + 32 + 32*16 + 16 + 16*1 + 1 = 817
 
 전략 실행 중 다음 지표가 실시간으로 표시됩니다:
 
+### GUI 모니터
+- **📖 Order Book**: 실시간 오더북 테이블 (Bid/Ask 가격 및 수량)
+- **📊 Depth Chart**: 오더북 깊이 차트 (Mid Price 중심 Bid/Ask 누적 물량)
+- **📈 Equity Curve**: 자본 변화 추이
+- **📊 PnL Chart**: 실현/미실현 손익
+- **🎯 Win Rate**: 승률 차트
+- **📊 Position**: 포지션 크기 변화
+
+### 전략 지표
 - **Prediction Accuracy**: 방향 예측 정확도 (%)
 - **Training Samples**: 학습에 사용된 샘플 수
 - **Win Rate**: 수익 거래 비율

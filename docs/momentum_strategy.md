@@ -243,6 +243,18 @@ if unrealized_pnl > 0 {
 # 기본 설정으로 실행
 cargo run momentum
 
+# GUI 모니터와 함께 실행
+cargo run momentum-gui
+```
+
+### GUI 모니터 기능
+- **📖 Order Book**: 실시간 오더북 테이블 (Bid/Ask 가격 및 수량)
+- **📊 Depth Chart**: 오더북 깊이 차트 (Mid Price 중심 Bid/Ask 누적 물량)
+- **📈 Equity Curve**: 자본 변화 추이
+- **📊 PnL / Position Charts**: 손익 및 포지션 차트
+- **⚙️ Control Panel**: 백테스트 제어 (시작/일시정지/중지, 속도 조절)
+
+```
 # 결과 예시
 🚀 Momentum Trading Strategy
 

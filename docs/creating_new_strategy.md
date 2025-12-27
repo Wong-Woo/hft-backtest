@@ -192,9 +192,23 @@ impl Strategy for MyStrategy {
     fn on_file_end(&mut self, state: &StrategyState) { }
     fn on_completed(&mut self, state: &StrategyState) { }
     fn update_interval(&self) -> u64 { 1 }      // How often to run
-    fn orderbook_depth(&self) -> usize { 10 }   // GUI orderbook levels
+    fn orderbook_depth(&self) -> usize { 10 }   // GUI orderbook levels (table + depth chart)
 }
 ```
+
+---
+
+## GUI Features
+
+When running with GUI (`cargo run <strategy>-gui`), you'll see:
+
+- **📖 Order Book**: Real-time orderbook table with bid/ask prices and quantities
+- **📊 Depth Chart**: Orderbook depth visualization centered on mid price
+  - Green area: Cumulative bid quantity (left of mid price)
+  - Red area: Cumulative ask quantity (right of mid price)
+  - Yellow dashed line: Mid price indicator
+- **📈 Performance Charts**: Equity curve, PnL, win rate, position, latency, etc.
+- **⚙️ Control Panel**: Start/pause/stop, speed control, file selection
 
 ---
 

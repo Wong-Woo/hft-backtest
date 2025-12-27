@@ -6,27 +6,47 @@
 
 ```
 src/
-├── config.rs              # 설정 파일
 ├── main.rs                # 메인 엔트리 포인트
 ├── common/                # 공통 유틸리티
-│   └── data_loader.rs     # 데이터 파일 로딩
-├── display/               # 오더북 시각화
-│   └── order_book_display.rs
-├── print_depth/           # 오더북 출력 모드
-│   └── print_depth_runner.rs
-├── monitor/               # GUI 성능 모니터
-│   ├── mod.rs
+│   └── helpers.rs         # 헬퍼 함수
+├── config/                # 설정 파일
+│   ├── data.rs            # 데이터 설정
+│   ├── strategy.rs        # 전략 설정
+│   ├── timing.rs          # 타이밍 설정
+│   └── trading.rs         # 트레이딩 설정
+├── controller/            # 전략 컨트롤러
+│   ├── commands.rs        # 커맨드 정의
+│   └── strategy_controller.rs  # 전략 제어
+├── monitor/               # 성능 모니터
 │   └── performance_monitor.rs
+├── ui/                    # GUI 컴포넌트
+│   ├── app.rs             # 메인 앱
+│   ├── control_panel.rs   # 제어 패널
+│   ├── data.rs            # 데이터 구조
+│   ├── orderbook.rs       # 오더북 뷰 + 깊이 차트
+│   ├── stats_panel.rs     # 통계 패널
+│   └── charts/            # 차트 컴포넌트
+│       ├── history.rs     # 차트 히스토리
+│       └── renderer.rs    # 차트 렌더러
 └── strategy/              # 전략 구현
+    ├── strategy_type.rs   # 전략 타입 정의
+    ├── base/              # 기본 전략 프레임워크
+    │   ├── strategy_trait.rs   # 전략 트레이트
+    │   └── runner_base.rs      # 전략 실행기
     ├── market_maker/      # Market Making 전략
     │   ├── market_maker_runner.rs  # 전략 실행
-    │   ├── pricing.rs              # 가격 계산 (Micro Price, Imbalance)
-    │   ├── spread.rs               # 스프레드 계산 (Avellaneda-Stoikov)
-    │   ├── risk_manager.rs         # 리스크 관리 (Toxic Flow Detection)
-    │   └── order_manager.rs        # 주문 집행 (Layering)
-    └── momentum/          # Momentum 전략
-        ├── momentum_runner.rs      # 전략 실행
-        └── indicator.rs            # 모멘텀 지표 계산
+    │   ├── pricing.rs              # 가격 계산
+    │   ├── spread.rs               # 스프레드 계산
+    │   ├── risk_manager.rs         # 리스크 관리
+    │   ├── order_manager.rs        # 주문 집행
+    │   └── order_tracker.rs        # 주문 추적
+    ├── momentum/          # Momentum 전략
+    │   ├── momentum_runner.rs      # 전략 실행
+    │   └── indicator.rs            # 모멘텀 지표
+    └── prediction/        # ML 가격 예측 전략
+        ├── prediction_runner.rs    # 전략 실행
+        ├── orderbook_features.rs   # 오더북 특성 추출
+        └── price_predictor.rs      # MLP 가격 예측
 ```
 
 ## 실행 방법
@@ -56,9 +76,13 @@ cargo run momentum-gui        # Momentum + GUI
 ```
 
 GUI 모니터에서 실시간으로 확인 가능:
+- � Order Book (실시간 오더북 테이블)
+- 📊 Depth Chart (오더북 깊이 차트 - Mid Price 중심 bid/ask 시각화)
 - 📈 Equity Curve (자본 곡선)
 - 💰 Total PnL (실현/미실현 손익)
+- 🎯 Win Rate (승률 추이)
 - 📊 Position (포지션 크기)
+- ⏱️ Latency (지연 시간)
 - 💹 Mid Price (중간가)
 
 ## 전략 구성 요소 (SOLID Principles)
@@ -226,3 +250,6 @@ Running strategy on file [1/1]: ...
 - **GUI**: egui (즉각적 모드 GUI, 크로스 플랫폼)
 - **멀티스레딩**: 별도 스레드에서 GUI 실행, 채널로 데이터 통신
 - **시각화**: egui_plot (실시간 차트 렌더링)
+  - 오더북 깊이 차트 (Bid/Ask 누적 물량)
+  - Equity, PnL, Position 등 성과 차트
+- **ML**: Candle (Rust 네이티브 딥러닝 프레임워크)
