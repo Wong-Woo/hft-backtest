@@ -5,6 +5,7 @@ use hftbacktest::{
         PowerProbQueueFunc3, TradingValueFeeModel}},
     prelude::{Bot, HashMapMarketDepth, Status, TimeInForce, OrdType},
     depth::MarketDepth,
+    types::ElapseResult,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -151,6 +152,11 @@ impl MarketMakerRunner {
             
             let data_file = self.data_files[file_idx].clone();
             
+            // Notify GUI to clear chart data for new file (except first file)
+            if file_idx > 0 {
+                controller.notify_new_file();
+            }
+            
             println!("\n{}", "=".repeat(60));
             println!("Running strategy on file [{}/{}]: {}", 
                      file_idx + 1, 
@@ -168,6 +174,7 @@ impl MarketMakerRunner {
         if !controller.should_stop() {
             controller.mark_completed();
             println!("\n✅ All files processed successfully!");
+            println!("📤 Sent Completed signal to GUI");
         }
         
         // Keep thread alive to process commands until GUI closes
@@ -214,8 +221,15 @@ impl MarketMakerRunner {
         let mut last_gui_update = Instant::now();
         let mut last_command_check = Instant::now();
         let command_check_interval = Duration::from_millis(16); // ~60Hz command polling
+        let mut data_ended = false;
 
         loop {
+            // Check if data has ended
+            if data_ended {
+                println!("\nEnd of data reached!");
+                return self.finish_strategy(hbt, inventory, realized_pnl, cash, initial_price);
+            }
+            
             // Check pause/stop state (always, regardless of timing)
             if !controller.is_running() {
                 // Process commands while paused
@@ -239,26 +253,40 @@ impl MarketMakerRunner {
                 }
             }
             
-            // Speed adjustment - affects simulation time, not real time
+            // Speed adjustment - affects simulation time
             let speed = controller.speed_multiplier();
             
-            // For very high speeds (>10x), batch multiple iterations
-            let iterations_per_loop = if speed > 10.0 {
-                (speed / 10.0).ceil() as usize
+            // Calculate iterations and delay based on speed
+            // Base: 1x speed = 1 iteration per 10ms
+            // Higher speed: more iterations per loop, less delay
+            let (iterations_per_loop, loop_delay_ms) = if speed >= 100.0 {
+                // Maximum speed: no delay, many iterations
+                (100, 0u64)
+            } else if speed >= 10.0 {
+                // High speed: batch iterations, minimal delay
+                ((speed / 10.0).ceil() as usize, 1)
+            } else if speed >= 1.0 {
+                // Normal speed range: 1 iteration, variable delay
+                (1, (10.0 / speed) as u64)
             } else {
-                1
+                // Slow motion: 1 iteration, longer delay
+                (1, (10.0 / speed) as u64)
             };
             
             for _ in 0..iterations_per_loop {
                 // Simulate time passing in backtest
                 match hbt.elapse(ELAPSE_DURATION_NS) {
+                    Ok(ElapseResult::EndOfData) => {
+                        data_ended = true;
+                        break;
+                    }
                     Ok(_) => {
                         let depth = hbt.depth(0);
                         
                         if !is_valid_depth(depth) {
                             continue;
                         }
-
+                        
                         update_count += 1;
                         
                         if initial_price == 0.0 {
@@ -286,8 +314,8 @@ impl MarketMakerRunner {
                         }
                     }
                     Err(_) => {
-                        println!("\nEnd of data reached!");
-                        return self.finish_strategy(hbt, inventory, realized_pnl, cash, initial_price);
+                        data_ended = true;
+                        break;
                     }
                 }
             }
@@ -331,8 +359,10 @@ impl MarketMakerRunner {
                 last_gui_update = Instant::now();
             }
             
-            // Yield to prevent CPU spinning at lower speeds
-            if speed <= 1.0 {
+            // Apply speed-based delay
+            if loop_delay_ms > 0 {
+                std::thread::sleep(Duration::from_millis(loop_delay_ms));
+            } else {
                 std::thread::yield_now();
             }
         }

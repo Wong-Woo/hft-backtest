@@ -154,6 +154,11 @@ impl StrategyController {
         let _ = self.response_tx.send(ControlResponse::Completed);
     }
 
+    /// Notify GUI that a new file is starting (clears chart data)
+    pub fn notify_new_file(&self) {
+        let _ = self.response_tx.send(ControlResponse::Skipped);
+    }
+
     /// Get clones for sharing with strategy thread
     #[allow(dead_code)]
     pub fn get_shared_handles(&self) -> (Arc<AtomicBool>, Arc<AtomicU64>, Arc<AtomicU64>) {

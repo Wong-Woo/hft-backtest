@@ -51,6 +51,11 @@ impl ControlPanel {
         self.can_start_new = can_start;
     }
     
+    /// Mark that new files must be selected before starting
+    pub fn mark_needs_new_files(&mut self) {
+        self.pending_file_change = false;
+    }
+    
     pub fn should_start_new_backtest(&mut self) -> bool {
         let requested = self.start_new_requested;
         self.start_new_requested = false;
@@ -104,7 +109,7 @@ impl ControlPanel {
             
             // Show hint when can start new backtest
             if self.can_start_new && matches!(self.current_state, ControlState::Stopped | ControlState::Completed | ControlState::Paused) {
-                if self.current_state == ControlState::Paused && self.pending_file_change {
+                if (self.current_state == ControlState::Paused || self.current_state == ControlState::Completed) && self.pending_file_change {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("📋 New files selected. Click 'Start New' to begin.")
@@ -112,10 +117,18 @@ impl ControlPanel {
                                 .color(egui::Color32::GOLD)
                         );
                     });
-                } else if matches!(self.current_state, ControlState::Stopped | ControlState::Completed) {
+                } else if self.current_state == ControlState::Completed {
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("✅ Ready for new backtest. Select files and click 'Start New'.")
+                            egui::RichText::new("✅ Backtest completed. Select new files to run again.")
+                                .small()
+                                .color(egui::Color32::LIGHT_GREEN)
+                        );
+                    });
+                } else if self.current_state == ControlState::Stopped {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("⏹ Stopped. Select files and click 'Start New'.")
                                 .small()
                                 .color(egui::Color32::LIGHT_GREEN)
                         );
@@ -127,9 +140,13 @@ impl ControlPanel {
             
             // Control buttons with improved logic
             ui.horizontal(|ui| {
-                // Start New: Available when can_start_new and (Stopped/Completed, or Paused with pending files)
+                // Start New: Available when can_start_new and:
+                // - Stopped: can start immediately
+                // - Completed: requires new file selection (pending_file_change)
+                // - Paused with pending files
                 let can_start_new = self.can_start_new && (
-                    matches!(self.current_state, ControlState::Stopped | ControlState::Completed) ||
+                    self.current_state == ControlState::Stopped ||
+                    (self.current_state == ControlState::Completed && self.pending_file_change) ||
                     (self.current_state == ControlState::Paused && self.pending_file_change)
                 );
                 

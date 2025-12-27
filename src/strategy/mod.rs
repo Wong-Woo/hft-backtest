@@ -1,8 +1,10 @@
+pub mod base;
 pub mod market_maker;
 pub mod momentum;
 pub mod prediction;
 mod strategy_type;
 
+pub use base::{Strategy, StrategyState, StrategyRunner, TickContext};
 pub use market_maker::MarketMakerRunner;
 pub use momentum::MomentumRunner;
 pub use prediction::PredictionRunner;

@@ -90,6 +90,8 @@ impl PerformanceMonitor {
         self.strategy_thread = Some(handle);
         self.can_start_new = false;
         self.chart_history.clear();
+        self.current_data = None;
+        self.data_updated = true;
         
         // Send Start command immediately after spawning
         let _ = cmd_tx.send(StrategyCommand::Start);
@@ -130,7 +132,11 @@ impl PerformanceMonitor {
                 }
                 ControlResponse::Skipped => self.chart_history.clear(),
                 ControlResponse::Error(err) => eprintln!("Control error: {}", err),
-                ControlResponse::Completed => self.control_panel.update_state(ControlState::Completed),
+                ControlResponse::Completed => {
+                    self.control_panel.update_state(ControlState::Completed);
+                    // Require new file selection before starting again
+                    self.control_panel.mark_needs_new_files();
+                }
                 ControlResponse::ThreadTerminated => self.can_start_new = true,
             }
         }
@@ -255,8 +261,10 @@ impl eframe::App for PerformanceMonitor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_data();
         
-        if self.data_updated {
-            ctx.request_repaint();
+        // Request repaint when strategy thread is running or data was updated
+        let is_strategy_running = self.strategy_thread.is_some();
+        if is_strategy_running || self.data_updated {
+            ctx.request_repaint_after(std::time::Duration::from_millis(33));
         }
         
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {

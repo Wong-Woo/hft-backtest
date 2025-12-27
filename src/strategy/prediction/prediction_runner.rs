@@ -5,6 +5,7 @@ use hftbacktest::{
         PowerProbQueueFunc3, TradingValueFeeModel}},
     prelude::{Bot, HashMapMarketDepth, Status, TimeInForce, OrdType},
     depth::MarketDepth,
+    types::ElapseResult,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -245,6 +246,11 @@ impl PredictionRunner {
             
             let data_file = self.data_files[file_idx].clone();
             
+            // Notify GUI to clear chart data for new file (except first file)
+            if file_idx > 0 {
+                controller.notify_new_file();
+            }
+            
             println!("\n{}", "=".repeat(60));
             println!("Running ML Prediction strategy on file [{}/{}]: {}", 
                      file_idx + 1, 
@@ -312,8 +318,21 @@ impl PredictionRunner {
         let mut last_command_check = Instant::now();
         let command_check_interval = Duration::from_millis(16); // ~60Hz command polling
         let mut current_time_ns: i64 = 0;
+        let mut data_ended = false;
 
         loop {
+            // Check if data has ended
+            if data_ended {
+                println!("\nEnd of data reached!");
+                if self.position_state != PositionState::Flat {
+                    println!("Closing remaining position...");
+                    let _ = self.close_position(&mut hbt, &mut realized_pnl)?;
+                }
+                let final_depth = hbt.depth(0);
+                self.print_final_stats(realized_pnl, cash, final_depth);
+                return Ok(());
+            }
+            
             // Check pause/stop state (always, regardless of timing)
             if !controller.is_running() {
                 // Process commands while paused
@@ -337,16 +356,26 @@ impl PredictionRunner {
                 }
             }
             
-            // Speed adjustment - batch iterations for high speed
+            // Speed adjustment - affects simulation time
             let speed = controller.speed_multiplier();
-            let iterations_per_loop = if speed > 10.0 {
-                (speed / 10.0).ceil() as usize
+            
+            // Calculate iterations and delay based on speed
+            let (iterations_per_loop, loop_delay_ms) = if speed >= 100.0 {
+                (100, 0u64)
+            } else if speed >= 10.0 {
+                ((speed / 10.0).ceil() as usize, 1)
+            } else if speed >= 1.0 {
+                (1, (10.0 / speed) as u64)
             } else {
-                1
+                (1, (10.0 / speed) as u64)
             };
             
             for _ in 0..iterations_per_loop {
                 match hbt.elapse(ELAPSE_DURATION_NS) {
+                    Ok(ElapseResult::EndOfData) => {
+                        data_ended = true;
+                        break;
+                    }
                     Ok(_) => {
                         current_time_ns += ELAPSE_DURATION_NS;
                         let depth = hbt.depth(0);
@@ -354,39 +383,39 @@ impl PredictionRunner {
                         if !is_valid_depth(depth) {
                             continue;
                         }
-
+                        
                         update_count += 1;
                         
                         let mid_price = calculate_mid_price(depth);
                         
-                        // 특성 추출
+                        // Feature extraction
                         let (bids, asks) = self.extract_levels(depth, 10);
                         
                         if let Some(features) = self.feature_extractor.extract(&bids, &asks) {
-                            // 과거 예측 검증 및 학습
+                            // Validate past predictions and learn
                             self.validate_and_learn_predictions(mid_price, current_time_ns);
                             
-                            // 새 예측 수행
+                            // Make new prediction
                             if let Ok((prediction, signal)) = self.predictor.predict(&features) {
-                                // 예측 기록
+                                // Record prediction
                                 self.pending_predictions.push_back(PricePredictionData {
                                     mid_price,
                                     predicted_change: prediction,
                                     timestamp: current_time_ns,
                                 });
                                 
-                                // 오래된 예측 제거
+                                // Remove old predictions
                                 while self.pending_predictions.len() > 100 {
                                     self.pending_predictions.pop_front();
                                 }
                                 
-                                // Warmup 체크
+                                // Warmup check
                                 if !self.is_warmed_up && self.predictor.get_training_samples() >= self.warmup_samples {
                                     self.is_warmed_up = true;
                                     println!("\n🚀 Model warmed up! Starting trading...\n");
                                 }
                                 
-                                // 거래 실행 (warmup 후에만)
+                                // Execute trade (only after warmup)
                                 if self.is_warmed_up && update_count % UPDATE_INTERVAL == 0 {
                                     self.execute_strategy(&mut hbt, &mut realized_pnl, signal, prediction, current_time_ns)?;
                                 }
@@ -394,15 +423,8 @@ impl PredictionRunner {
                         }
                     }
                     Err(_) => {
-                        println!("\nEnd of data reached!");
-                        // 남은 포지션 청산
-                        if self.position_state != PositionState::Flat {
-                            println!("\nClosing remaining position...");
-                            let _ = self.close_position(&mut hbt, &mut realized_pnl)?;
-                        }
-                        let final_depth = hbt.depth(0);
-                        self.print_final_stats(realized_pnl, cash, final_depth);
-                        return Ok(());
+                        data_ended = true;
+                        break;
                     }
                 }
             }
@@ -447,8 +469,10 @@ impl PredictionRunner {
                 last_gui_update = Instant::now();
             }
             
-            // Yield at lower speeds
-            if speed <= 1.0 {
+            // Apply speed-based delay
+            if loop_delay_ms > 0 {
+                std::thread::sleep(Duration::from_millis(loop_delay_ms));
+            } else {
                 std::thread::yield_now();
             }
         }

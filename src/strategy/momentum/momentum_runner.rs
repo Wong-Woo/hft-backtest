@@ -5,6 +5,7 @@ use hftbacktest::{
         PowerProbQueueFunc3, TradingValueFeeModel}},
     prelude::{Bot, HashMapMarketDepth, Status, TimeInForce, OrdType},
     depth::MarketDepth,
+    types::ElapseResult,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -160,6 +161,11 @@ impl MomentumRunner {
             
             let data_file = self.data_files[file_idx].clone();
             
+            // Notify GUI to clear chart data for new file (except first file)
+            if file_idx > 0 {
+                controller.notify_new_file();
+            }
+            
             println!("\n{}", "=".repeat(60));
             println!("Running momentum strategy on file [{}/{}]: {}", 
                      file_idx + 1, 
@@ -225,8 +231,21 @@ impl MomentumRunner {
         let mut last_gui_update = Instant::now();
         let mut last_command_check = Instant::now();
         let command_check_interval = Duration::from_millis(16); // ~60Hz command polling
+        let mut data_ended = false;
 
         loop {
+            // Check if data has ended
+            if data_ended {
+                println!("\nEnd of data reached!");
+                if self.position_state != PositionState::Flat {
+                    println!("Closing remaining position...");
+                    let _ = self.close_position(&mut hbt, &mut realized_pnl)?;
+                }
+                let final_depth = hbt.depth(0);
+                self.print_final_stats(realized_pnl, cash, final_depth);
+                return Ok(());
+            }
+            
             // Check pause/stop state (always, regardless of timing)
             if !controller.is_running() {
                 // Process commands while paused
@@ -250,23 +269,33 @@ impl MomentumRunner {
                 }
             }
             
-            // Speed adjustment - batch iterations for high speed
+            // Speed adjustment - affects simulation time
             let speed = controller.speed_multiplier();
-            let iterations_per_loop = if speed > 10.0 {
-                (speed / 10.0).ceil() as usize
+            
+            // Calculate iterations and delay based on speed
+            let (iterations_per_loop, loop_delay_ms) = if speed >= 100.0 {
+                (100, 0u64)
+            } else if speed >= 10.0 {
+                ((speed / 10.0).ceil() as usize, 1)
+            } else if speed >= 1.0 {
+                (1, (10.0 / speed) as u64)
             } else {
-                1
+                (1, (10.0 / speed) as u64)
             };
             
             for _ in 0..iterations_per_loop {
                 match hbt.elapse(ELAPSE_DURATION_NS) {
+                    Ok(ElapseResult::EndOfData) => {
+                        data_ended = true;
+                        break;
+                    }
                     Ok(_) => {
                         let depth = hbt.depth(0);
                         
                         if !is_valid_depth(depth) {
                             continue;
                         }
-
+                        
                         update_count += 1;
                         
                         let mid_price = calculate_mid_price(depth);
@@ -280,15 +309,8 @@ impl MomentumRunner {
                         }
                     }
                     Err(_) => {
-                        println!("\nEnd of data reached!");
-                        // Close position and finish
-                        if self.position_state != PositionState::Flat {
-                            println!("\nClosing remaining position...");
-                            let _ = self.close_position(&mut hbt, &mut realized_pnl)?;
-                        }
-                        let final_depth = hbt.depth(0);
-                        self.print_final_stats(realized_pnl, cash, final_depth);
-                        return Ok(());
+                        data_ended = true;
+                        break;
                     }
                 }
             }
@@ -331,8 +353,10 @@ impl MomentumRunner {
                 last_gui_update = Instant::now();
             }
             
-            // Yield at lower speeds
-            if speed <= 1.0 {
+            // Apply speed-based delay
+            if loop_delay_ms > 0 {
+                std::thread::sleep(Duration::from_millis(loop_delay_ms));
+            } else {
                 std::thread::yield_now();
             }
         }
