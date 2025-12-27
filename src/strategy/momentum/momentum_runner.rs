@@ -46,6 +46,7 @@ pub struct MomentumRunner {
     #[allow(dead_code)]
     position_entry_time: Option<Instant>,
     total_hold_time: Duration,
+    next_order_id: u64,
 }
 
 impl MomentumRunner {
@@ -96,6 +97,7 @@ impl MomentumRunner {
             total_fills: 0,
             position_entry_time: None,
             total_hold_time: Duration::ZERO,
+            next_order_id: 1,
         })
     }
     
@@ -441,30 +443,37 @@ impl MomentumRunner {
     where
         MD: MarketDepth,
     {
+        // Clear any pending orders first
+        hbt.clear_inactive_orders(Some(0));
+        
         let depth = hbt.depth(0);
         let tick_size = depth.tick_size();
         let best_ask_tick = depth.best_ask_tick();
         let best_ask_price = best_ask_tick as f64 * tick_size;
         
+        let order_id = self.next_order_id;
+        self.next_order_id += 1;
+        
         hbt.submit_buy_order(
             0,
-            100, // order_id
+            order_id,
             best_ask_price,
             self.position_size,
             TimeInForce::GTC,
             OrdType::Limit,
             false,
         )?;
+        self.total_orders += 1;
 
-        hbt.wait_order_response(0, 100, 10_000_000_000)?;
+        // Short timeout to avoid blocking - 100ms
+        let _ = hbt.wait_order_response(0, order_id, 100_000_000);
 
         let orders = hbt.orders(0);
-        if let Some(order) = orders.get(&100) {
+        if let Some(order) = orders.get(&order_id) {
             if order.status == Status::Filled {
                 self.entry_price = order.price_tick as f64 * tick_size;
                 self.position_qty = order.qty;
-                self.position_state = PositionState::Long;
-                
+                self.position_state = PositionState::Long;                self.total_fills += 1;                
                 println!("    ✓ Opened LONG @ {:.2} qty {:.4}", self.entry_price, self.position_qty);
             }
         }
@@ -479,29 +488,38 @@ impl MomentumRunner {
     where
         MD: MarketDepth,
     {
+        // Clear any pending orders first
+        hbt.clear_inactive_orders(Some(0));
+        
         let depth = hbt.depth(0);
         let tick_size = depth.tick_size();
         let best_bid_tick = depth.best_bid_tick();
         let best_bid_price = best_bid_tick as f64 * tick_size;
         
+        let order_id = self.next_order_id;
+        self.next_order_id += 1;
+        
         hbt.submit_sell_order(
             0,
-            101, // order_id
+            order_id,
             best_bid_price,
             self.position_size,
             TimeInForce::GTC,
             OrdType::Limit,
             false,
         )?;
+        self.total_orders += 1;
 
-        hbt.wait_order_response(0, 101, 10_000_000_000)?;
+        // Short timeout to avoid blocking - 100ms
+        let _ = hbt.wait_order_response(0, order_id, 100_000_000);
 
         let orders = hbt.orders(0);
-        if let Some(order) = orders.get(&101) {
+        if let Some(order) = orders.get(&order_id) {
             if order.status == Status::Filled {
                 self.entry_price = order.price_tick as f64 * tick_size;
                 self.position_qty = order.qty;
                 self.position_state = PositionState::Short;
+                self.total_fills += 1;
                 
                 println!("    ✓ Opened SHORT @ {:.2} qty {:.4}", self.entry_price, self.position_qty);
             }
@@ -518,6 +536,9 @@ impl MomentumRunner {
     where
         MD: MarketDepth,
     {
+        // Clear any pending orders first
+        hbt.clear_inactive_orders(Some(0));
+        
         let depth = hbt.depth(0);
         let tick_size = depth.tick_size();
 
@@ -526,25 +547,31 @@ impl MomentumRunner {
                 let best_bid_tick = depth.best_bid_tick();
                 let best_bid_price = best_bid_tick as f64 * tick_size;
                 
+                let order_id = self.next_order_id;
+                self.next_order_id += 1;
+                
                 hbt.submit_sell_order(
                     0,
-                    102,
+                    order_id,
                     best_bid_price,
                     self.position_qty,
                     TimeInForce::GTC,
                     OrdType::Limit,
                     false,
                 )?;
+                self.total_orders += 1;
 
-                hbt.wait_order_response(0, 102, 10_000_000_000)?;
+                // Short timeout to avoid blocking - 100ms
+                let _ = hbt.wait_order_response(0, order_id, 100_000_000);
 
                 let orders = hbt.orders(0);
-                if let Some(order) = orders.get(&102) {
+                if let Some(order) = orders.get(&order_id) {
                     if order.status == Status::Filled {
                         let exit_price = order.price_tick as f64 * tick_size;
                         let pnl = (exit_price - self.entry_price) * self.position_qty;
                         let fee = (exit_price * self.position_qty + self.entry_price * self.position_qty) * 0.0001;
                         *realized_pnl += pnl - fee;
+                        self.total_fills += 1;
                         
                         println!("    ✓ Closed LONG @ {:.2} | PnL: {:.2} | Fee: {:.2}", 
                                  exit_price, pnl, fee);
@@ -555,25 +582,31 @@ impl MomentumRunner {
                 let best_ask_tick = depth.best_ask_tick();
                 let best_ask_price = best_ask_tick as f64 * tick_size;
                 
+                let order_id = self.next_order_id;
+                self.next_order_id += 1;
+                
                 hbt.submit_buy_order(
                     0,
-                    103,
+                    order_id,
                     best_ask_price,
                     self.position_qty,
                     TimeInForce::GTC,
                     OrdType::Limit,
                     false,
                 )?;
+                self.total_orders += 1;
 
-                hbt.wait_order_response(0, 103, 10_000_000_000)?;
+                // Short timeout to avoid blocking - 100ms
+                let _ = hbt.wait_order_response(0, order_id, 100_000_000);
 
                 let orders = hbt.orders(0);
-                if let Some(order) = orders.get(&103) {
+                if let Some(order) = orders.get(&order_id) {
                     if order.status == Status::Filled {
                         let exit_price = order.price_tick as f64 * tick_size;
                         let pnl = (self.entry_price - exit_price) * self.position_qty;
                         let fee = (exit_price * self.position_qty + self.entry_price * self.position_qty) * 0.0001;
                         *realized_pnl += pnl - fee;
+                        self.total_fills += 1;
                         
                         println!("    ✓ Closed SHORT @ {:.2} | PnL: {:.2} | Fee: {:.2}", 
                                  exit_price, pnl, fee);

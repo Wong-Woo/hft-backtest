@@ -324,14 +324,14 @@ impl PerformanceMonitor {
         ui.separator();
         
         ui.horizontal(|ui| {
-            if ui.button("🗑️ Clear All Data").clicked() {
+            if ui.button("Clear All Data").clicked() {
                 self.equity_history.clear();
                 self.pnl_history.clear();
                 self.position_history.clear();
                 self.price_history.clear();
             }
             
-            if ui.button("🔄 Reset to 1000").clicked() {
+            if ui.button("Reset to 1000").clicked() {
                 self.max_points = 1000;
             }
         });

@@ -609,7 +609,8 @@ impl PredictionRunner {
         )?;
         self.total_orders += 1;
 
-        hbt.wait_order_response(0, order_id, 10_000_000_000)?;
+        // Short timeout to avoid blocking - 100ms
+        let _ = hbt.wait_order_response(0, order_id, 100_000_000);
 
         let orders = hbt.orders(0);
         if let Some(order) = orders.get(&order_id) {
@@ -652,7 +653,8 @@ impl PredictionRunner {
         )?;
         self.total_orders += 1;
 
-        hbt.wait_order_response(0, order_id, 10_000_000_000)?;
+        // Short timeout to avoid blocking - 100ms
+        let _ = hbt.wait_order_response(0, order_id, 100_000_000);
 
         let orders = hbt.orders(0);
         if let Some(order) = orders.get(&order_id) {
@@ -698,7 +700,8 @@ impl PredictionRunner {
                 )?;
                 self.total_orders += 1;
 
-                hbt.wait_order_response(0, order_id, 10_000_000_000)?;
+                // Short timeout to avoid blocking - 100ms
+                let _ = hbt.wait_order_response(0, order_id, 100_000_000);
 
                 let orders = hbt.orders(0);
                 if let Some(order) = orders.get(&order_id) {
@@ -735,7 +738,8 @@ impl PredictionRunner {
                 )?;
                 self.total_orders += 1;
 
-                hbt.wait_order_response(0, order_id, 10_000_000_000)?;
+                // Short timeout to avoid blocking - 100ms
+                let _ = hbt.wait_order_response(0, order_id, 100_000_000);
 
                 let orders = hbt.orders(0);
                 if let Some(order) = orders.get(&order_id) {

@@ -45,7 +45,7 @@ impl PerformanceMonitor {
             data_receiver: data_rx,
             control_response_rx: response_rx,
             control_panel: ControlPanel::new(cmd_tx.clone(), data_file),
-            chart_history: ChartHistory::new(1000),
+            chart_history: ChartHistory::new(500),
             orderbook_view: OrderbookView::new(10),
             current_data: None,
             initial_equity,
@@ -219,7 +219,7 @@ impl PerformanceMonitor {
 
     fn render_settings_panel(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.heading("⚙️ Display Settings");
+            ui.heading("Display Settings");
             ui.separator();
             
             ui.horizontal(|ui| {
