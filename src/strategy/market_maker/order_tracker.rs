@@ -64,17 +64,7 @@ impl OrderTracker {
         }
     }
 
-    /// 통계 정보
-    pub fn get_stats(&self) -> (u64, f64, f64, usize) {
-        (
-            self.filled_count,
-            self.total_buy_volume,
-            self.total_sell_volume,
-            self.active_orders.len(),
-        )
-    }
-
-    /// 주문 존재 확인
+    /// Check if an order exists
     #[allow(dead_code)]
     pub fn has_order(&self, order_id: u64) -> bool {
         self.active_orders.contains_key(&order_id)

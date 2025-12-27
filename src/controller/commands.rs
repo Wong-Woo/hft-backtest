@@ -10,11 +10,16 @@ pub enum StrategyCommand {
     /// Change execution speed (multiplier: 0.1 = 10x slower, 10.0 = 10x faster)
     SetSpeed(f64),
     /// Change data files (supports multiple files for continuous backtesting)
+    #[allow(dead_code)]
     ChangeFiles(Vec<String>),
     /// Skip current file and move to next (for multi-file backtesting)
     Skip,
     /// Reset strategy state
+    #[allow(dead_code)]
     Reset,
+    /// Request to start new backtest (GUI will spawn new thread)
+    #[allow(dead_code)]
+    RequestNewBacktest(Vec<String>),
 }
 
 /// Control responses sent back to GUI
@@ -33,6 +38,9 @@ pub enum ControlResponse {
     Error(String),
     /// Strategy completed
     Completed,
+    /// Thread terminated, ready for new backtest
+    #[allow(dead_code)]
+    ThreadTerminated,
 }
 
 /// Current control state

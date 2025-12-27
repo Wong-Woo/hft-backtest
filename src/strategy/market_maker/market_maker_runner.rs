@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
-use crate::common::{DataLoader, calculate_mid_price, is_valid_depth};
+use crate::common::{calculate_mid_price, is_valid_depth};
 use crate::config::{TICK_SIZE, LOT_SIZE, ELAPSE_DURATION_NS, UPDATE_INTERVAL, COMMAND_POLL_TIMEOUT_MICROS};
 use crate::ui::{PerformanceData, OrderBookLevel};
 use crate::controller::StrategyController;
@@ -38,8 +38,8 @@ pub struct MarketMakerRunner {
 }
 
 impl MarketMakerRunner {
-    pub fn new(
-        data_pattern: String,
+    pub fn new_with_files(
+        files: Vec<String>,
         gamma: f64,
         _initial_kappa: f64,
         max_inventory: f64,
@@ -49,8 +49,27 @@ impl MarketMakerRunner {
         order_layers: usize,
         initial_capital: f64,
     ) -> Result<Self> {
-        let data_files = DataLoader::load_files(&data_pattern)?;
-
+        let data_files: Vec<PathBuf> = files.into_iter().map(PathBuf::from).collect();
+        if data_files.is_empty() {
+            anyhow::bail!("No data files provided");
+        }
+        println!("Using {} file(s):", data_files.len());
+        for (i, f) in data_files.iter().enumerate() {
+            println!("  [{}] {}", i + 1, f.display());
+        }
+        Self::create_runner(data_files, gamma, max_inventory, volatility_threshold, order_size, depth_levels, order_layers, initial_capital)
+    }
+    
+    fn create_runner(
+        data_files: Vec<PathBuf>,
+        gamma: f64,
+        max_inventory: f64,
+        volatility_threshold: f64,
+        order_size: f64,
+        depth_levels: usize,
+        order_layers: usize,
+        initial_capital: f64,
+    ) -> Result<Self> {
         Ok(Self {
             data_files,
             micro_price_calc: MicroPriceCalculator::new(depth_levels),
@@ -120,6 +139,11 @@ impl MarketMakerRunner {
         let file_count = self.data_files.len();
         
         for file_idx in 0..file_count {
+            // Wait for start signal if in paused or stopped state
+            while !controller.is_running() && !controller.should_stop() {
+                controller.process_commands(Duration::from_millis(100));
+            }
+            
             if controller.should_stop() {
                 println!("\n⏹ Strategy stopped by user");
                 break;
@@ -146,29 +170,23 @@ impl MarketMakerRunner {
             println!("\n✅ All files processed successfully!");
         }
         
+        // Keep thread alive to process commands until GUI closes
+        self.keep_alive_until_close(&controller);
+        
         Ok(())
     }
-
-    /// Run strategy with GUI monitor (legacy version, for backward compatibility)
-    #[allow(dead_code)]
-    pub fn run_with_monitor(&mut self, sender: Sender<PerformanceData>) -> Result<()> {
-        let file_count = self.data_files.len();
+    
+    fn keep_alive_until_close(&self, controller: &StrategyController) {
+        println!("Backtest finished. Close the window to exit.");
         
-        for file_idx in 0..file_count {
-            let data_file = self.data_files[file_idx].clone();
-            
-            println!("\n{}", "=".repeat(60));
-            println!("Running strategy on file [{}/{}]: {}", 
-                     file_idx + 1, 
-                     file_count, 
-                     data_file.display());
-            println!("{}\n", "=".repeat(60));
-            
-            self.run_strategy(data_file.to_str().unwrap(), Some(&sender))?;
+        loop {
+            if !controller.process_commands(Duration::from_millis(200)) {
+                std::thread::sleep(Duration::from_millis(100));
+                if !controller.process_commands(Duration::from_millis(100)) {
+                    break;
+                }
+            }
         }
-        
-        println!("\n✅ All files processed successfully!");
-        Ok(())
     }
 
     /// Run strategy on a single file (with Controller)
@@ -194,107 +212,142 @@ impl MarketMakerRunner {
         println!("Waiting for market data...\n");
 
         let mut last_gui_update = Instant::now();
+        let mut last_command_check = Instant::now();
+        let command_check_interval = Duration::from_millis(16); // ~60Hz command polling
 
         loop {
-            // Process commands (non-blocking)
-            controller.process_commands(Duration::from_micros(COMMAND_POLL_TIMEOUT_MICROS));
-            
-            // Check for stop signal
-            if controller.should_stop() {
-                println!("\n⏹ Strategy stopped by user");
-                break;
-            }
-            
-            // Handle pause state
+            // Check pause/stop state (always, regardless of timing)
             if !controller.is_running() {
-                controller.wait_while_paused();
+                // Process commands while paused
+                controller.process_commands(Duration::from_millis(50));
+                
                 if controller.should_stop() {
+                    println!("\n⏹ Strategy stopped by user");
                     break;
                 }
                 continue;
             }
             
-            // Speed adjustment
-            let speed = controller.speed_multiplier();
-            let adjusted_duration = (ELAPSE_DURATION_NS as f64 / speed) as i64;
-            
-            match hbt.elapse(adjusted_duration) {
-                Ok(_) => {
-                    let depth = hbt.depth(0);
-                    
-                    if !is_valid_depth(depth) {
-                        continue;
-                    }
-
-                    update_count += 1;
-                    
-                    if initial_price == 0.0 {
-                        initial_price = calculate_mid_price(depth);
-                        println!("Initial price set: {:.2}\n", initial_price);
-                        
-                        let _ = depth;
-                        self.place_initial_orders(&mut hbt)?;
-                        initial_orders_placed = true;
-                        continue;
-                    }
-                    
-                    if !initial_orders_placed {
-                        let _ = depth;
-                        self.place_initial_orders(&mut hbt)?;
-                        initial_orders_placed = true;
-                        continue;
-                    }
-                    
-                    if update_count % UPDATE_INTERVAL == 0 {
-                        let _ = depth;
-                        
-                        // Process orders and refill
-                        self.check_and_refill_orders(&mut hbt, &mut inventory, &mut realized_pnl)?;
-                        
-                        // Send data to GUI (throttled to ~30 FPS)
-                        if last_gui_update.elapsed() >= Duration::from_millis(33) {
-                            let depth_for_data = hbt.depth(0);
-                            let mid_price = calculate_mid_price(depth_for_data);
-                            let unrealized_pnl = inventory * (mid_price - initial_price);
-                            let position_value = inventory * mid_price;
-                            
-                            let (bids, asks) = self.extract_orderbook(depth_for_data, 10);
-                            let avg_hold_time = if self.num_trades > 0 {
-                                self.total_hold_time.as_secs_f64() / self.num_trades as f64
-                            } else {
-                                0.0
-                            };
-                            
-                            if let Err(e) = sender.send(PerformanceData {
-                                timestamp: update_count as f64,
-                                equity: cash + realized_pnl + position_value,
-                                realized_pnl,
-                                unrealized_pnl,
-                                position: inventory,
-                                mid_price,
-                                strategy_name: "Market Making".to_string(),
-                                num_trades: self.num_trades,
-                                winning_trades: self.winning_trades,
-                                total_fills: self.total_fills,
-                                total_orders: self.total_orders,
-                                position_hold_time: avg_hold_time,
-                                latency_micros: 100, // Placeholder latency
-                                bids,
-                                asks,
-                            }) {
-                                eprintln!("Warning: Failed to send performance data: {}", e);
-                            }
-                            last_gui_update = Instant::now();
-                        }
-                    }
-                }
-                Err(_) => {
-                    println!("\nEnd of data reached!");
+            // Process commands at fixed interval when running
+            if last_command_check.elapsed() >= command_check_interval {
+                controller.process_commands(Duration::from_micros(COMMAND_POLL_TIMEOUT_MICROS));
+                last_command_check = Instant::now();
+                
+                if controller.should_stop() {
+                    println!("\n⏹ Strategy stopped by user");
                     break;
                 }
             }
+            
+            // Speed adjustment - affects simulation time, not real time
+            let speed = controller.speed_multiplier();
+            
+            // For very high speeds (>10x), batch multiple iterations
+            let iterations_per_loop = if speed > 10.0 {
+                (speed / 10.0).ceil() as usize
+            } else {
+                1
+            };
+            
+            for _ in 0..iterations_per_loop {
+                // Simulate time passing in backtest
+                match hbt.elapse(ELAPSE_DURATION_NS) {
+                    Ok(_) => {
+                        let depth = hbt.depth(0);
+                        
+                        if !is_valid_depth(depth) {
+                            continue;
+                        }
+
+                        update_count += 1;
+                        
+                        if initial_price == 0.0 {
+                            initial_price = calculate_mid_price(depth);
+                            println!("Initial price set: {:.2}\n", initial_price);
+                            
+                            let _ = depth;
+                            self.place_initial_orders(&mut hbt)?;
+                            initial_orders_placed = true;
+                            continue;
+                        }
+                        
+                        if !initial_orders_placed {
+                            let _ = depth;
+                            self.place_initial_orders(&mut hbt)?;
+                            initial_orders_placed = true;
+                            continue;
+                        }
+                        
+                        if update_count % UPDATE_INTERVAL == 0 {
+                            let _ = depth;
+                            
+                            // Process orders and refill
+                            self.check_and_refill_orders(&mut hbt, &mut inventory, &mut realized_pnl)?;
+                        }
+                    }
+                    Err(_) => {
+                        println!("\nEnd of data reached!");
+                        return self.finish_strategy(hbt, inventory, realized_pnl, cash, initial_price);
+                    }
+                }
+            }
+            
+            // Send data to GUI (throttled to ~30 FPS, non-blocking)
+            if last_gui_update.elapsed() >= Duration::from_millis(33) {
+                let depth_for_data = hbt.depth(0);
+                if is_valid_depth(depth_for_data) {
+                    let mid_price = calculate_mid_price(depth_for_data);
+                    let unrealized_pnl = inventory * (mid_price - initial_price);
+                    let position_value = inventory * mid_price;
+                    
+                    let (bids, asks) = self.extract_orderbook(depth_for_data, 10);
+                    let avg_hold_time = if self.num_trades > 0 {
+                        self.total_hold_time.as_secs_f64() / self.num_trades as f64
+                    } else {
+                        0.0
+                    };
+                    
+                    // Use try_send to avoid blocking GUI
+                    // timestamp = simulation time in seconds
+                    let sim_time_secs = update_count as f64 * (ELAPSE_DURATION_NS as f64 / 1_000_000_000.0);
+                    let _ = sender.try_send(PerformanceData {
+                        timestamp: sim_time_secs,
+                        equity: cash + realized_pnl + position_value,
+                        realized_pnl,
+                        unrealized_pnl,
+                        position: inventory,
+                        mid_price,
+                        strategy_name: "Market Making".to_string(),
+                        num_trades: self.num_trades,
+                        winning_trades: self.winning_trades,
+                        total_fills: self.total_fills,
+                        total_orders: self.total_orders,
+                        position_hold_time: avg_hold_time,
+                        latency_micros: 100,
+                        bids,
+                        asks,
+                    });
+                }
+                last_gui_update = Instant::now();
+            }
+            
+            // Yield to prevent CPU spinning at lower speeds
+            if speed <= 1.0 {
+                std::thread::yield_now();
+            }
         }
 
+        self.finish_strategy(hbt, inventory, realized_pnl, cash, initial_price)
+    }
+    
+    fn finish_strategy(
+        &self,
+        hbt: Backtest<HashMapMarketDepth>,
+        inventory: f64,
+        realized_pnl: f64,
+        cash: f64,
+        initial_price: f64,
+    ) -> Result<()> {
         let final_depth = hbt.depth(0);
         
         self.print_final_stats(
@@ -304,114 +357,6 @@ impl MarketMakerRunner {
             initial_price,
             final_depth,
         );
-
-        Ok(())
-    }
-
-    /// Run strategy on a single file
-    fn run_strategy(&mut self, data_file: &str, sender: Option<&Sender<PerformanceData>>) -> Result<()> {
-        println!("Loading data from: {}", data_file);
-
-        let mut hbt = self.create_backtest(data_file)?;
-        
-        println!("Market making strategy started...\n");
-
-        let mut inventory = 0.0;
-        let mut realized_pnl = 0.0;
-        let cash = self.initial_capital;
-        let mut initial_price = 0.0;
-        let mut update_count = 0;
-        let mut initial_orders_placed = false;
-
-        println!("Waiting for market data...\n");
-
-        loop {
-            match hbt.elapse(ELAPSE_DURATION_NS) {
-                Ok(_) => {
-                    let depth = hbt.depth(0);
-                    
-                    if !is_valid_depth(depth) {
-                        continue;
-                    }
-
-                    update_count += 1;
-                    
-                    if initial_price == 0.0 {
-                        initial_price = calculate_mid_price(depth);
-                        println!("Initial price set: {:.2}\n", initial_price);
-                        
-                        let _ = depth;
-                        self.place_initial_orders(&mut hbt)?;
-                        initial_orders_placed = true;
-                        continue;
-                    }
-                    
-                    if !initial_orders_placed {
-                        let _ = depth;
-                        self.place_initial_orders(&mut hbt)?;
-                        initial_orders_placed = true;
-                        continue;
-                    }
-
-                    if update_count % UPDATE_INTERVAL == 0 {
-                        let _ = depth;
-                        self.check_and_refill_orders(&mut hbt, &mut inventory, &mut realized_pnl)?;
-                        
-                        // Send data to GUI
-                        if let Some(sender) = sender {
-                            let depth_for_data = hbt.depth(0);
-                            let mid_price = calculate_mid_price(depth_for_data);
-                            let inventory_value = inventory * mid_price;
-                            let unrealized_pnl = inventory * (mid_price - initial_price);
-                            
-                            let (bids, asks) = self.extract_orderbook(depth_for_data, 10);
-                            let avg_hold_time = if self.num_trades > 0 {
-                                self.total_hold_time.as_secs_f64() / self.num_trades as f64
-                            } else {
-                                0.0
-                            };
-                            
-                            if let Err(e) = sender.send(PerformanceData {
-                                timestamp: update_count as f64,
-                                equity: cash + realized_pnl + inventory_value,
-                                realized_pnl,
-                                unrealized_pnl,
-                                position: inventory,
-                                mid_price,
-                                strategy_name: "Market Making".to_string(),
-                                num_trades: self.num_trades,
-                                winning_trades: self.winning_trades,
-                                total_fills: self.total_fills,
-                                total_orders: self.total_orders,
-                                position_hold_time: avg_hold_time,
-                                latency_micros: 100, // Placeholder latency
-                                bids,
-                                asks,
-                            }) {
-                                eprintln!("Warning: Failed to send performance data: {}", e);
-                            }
-                        }
-                        
-                        let depth_for_print = hbt.depth(0);
-                        self.print_status(
-                            update_count as u64, 
-                            inventory, 
-                            realized_pnl, 
-                            cash,
-                            initial_price,
-                            depth_for_print
-                        );
-                    }
-                }
-                Err(_) => {
-                    println!("\nEnd of data reached!");
-                    break;
-                }
-            }
-        }
-
-        let final_depth = hbt.depth(0);
-        self.print_final_stats(inventory, realized_pnl, cash, initial_price, final_depth);
 
         Ok(())
     }
@@ -633,46 +578,6 @@ impl MarketMakerRunner {
         }
         
         Ok(())
-    }
-
-    fn print_status(
-        &self,
-        update_count: u64,
-        inventory: f64,
-        realized_pnl: f64,
-        cash: f64,
-        initial_price: f64,
-        depth: &dyn MarketDepth,
-    ) {
-        let tick_size = depth.tick_size();
-        let best_bid = depth.best_bid_tick() as f64 * tick_size;
-        let best_ask = depth.best_ask_tick() as f64 * tick_size;
-        let spread = best_ask - best_bid;
-        let current_price = (best_bid + best_ask) / 2.0;
-        
-        let inventory_value = inventory * current_price;
-        let portfolio_value = cash + inventory_value;
-        
-        let return_pct = ((portfolio_value - self.initial_capital) / self.initial_capital) * 100.0;
-        let unrealized_pnl = inventory * (current_price - initial_price);
-        let total_pnl = realized_pnl + unrealized_pnl;
-        
-        let micro_price = self.micro_price_calc.calculate(depth);
-        let imbalance = self.imbalance_calc.calculate(depth);
-        let volatility = self.risk_manager.calculate_volatility();
-        
-        let (filled_count, buy_vol, sell_vol, active_count) = self.order_tracker.get_stats();
-        
-        println!("\n--- Strategy Status (Update: {}) ---", update_count);
-        println!("  Market: Bid {:.2} | Ask {:.2} | Spread {:.2}", best_bid, best_ask, spread);
-        println!("  Micro Price: {:.2} | Imbalance: {:.4}", micro_price, imbalance);
-        println!("  Volatility: {:.6}", volatility);
-        println!("  Inventory: {:.4} | Cash: {:.2}", inventory, cash);
-        println!("  Realized PnL: {:.2} | Unrealized PnL: {:.2} | Total PnL: {:.2}", 
-                 realized_pnl, unrealized_pnl, total_pnl);
-        println!("  Portfolio Value: {:.2} | Return: {:.4}%", portfolio_value, return_pct);
-        println!("  Orders: Active {} | Filled {} | Buy Vol {:.4} | Sell Vol {:.4}", 
-                 active_count, filled_count, buy_vol, sell_vol);
     }
 
     fn print_final_stats(

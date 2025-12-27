@@ -58,6 +58,7 @@ impl StrategyController {
     }
 
     /// Signal to stop execution
+    #[allow(dead_code)]
     pub fn stop(&self) {
         self.state.store(ControlState::Stopped as u64, Ordering::Relaxed);
         self.should_stop.store(true, Ordering::Relaxed);
@@ -99,8 +100,9 @@ impl StrategyController {
     fn handle_command(&self, command: StrategyCommand) {
         match command {
             StrategyCommand::Start => {
-                self.state.store(ControlState::Running as u64, Ordering::Relaxed);
+                // Reset should_stop flag when starting (allows restart after stop)
                 self.should_stop.store(false, Ordering::Relaxed);
+                self.state.store(ControlState::Running as u64, Ordering::Relaxed);
                 let _ = self.response_tx.send(ControlResponse::StateChanged(ControlState::Running));
             }
             StrategyCommand::Pause => {
@@ -118,7 +120,12 @@ impl StrategyController {
                 let _ = self.response_tx.send(ControlResponse::SpeedChanged(clamped_speed));
             }
             StrategyCommand::ChangeFiles(files) => {
-                // For now, just notify. Actual file change would require restarting
+                // Auto-pause when files change (if running)
+                if self.state() == ControlState::Running {
+                    self.state.store(ControlState::Paused as u64, Ordering::Relaxed);
+                    let _ = self.response_tx.send(ControlResponse::StateChanged(ControlState::Paused));
+                }
+                // Notify about file change
                 let _ = self.response_tx.send(ControlResponse::FilesChanged(files));
             }
             StrategyCommand::Skip => {
@@ -131,6 +138,12 @@ impl StrategyController {
                 self.should_skip.store(false, Ordering::Relaxed);
                 self.speed_multiplier.store(1.0f64.to_bits(), Ordering::Relaxed);
                 let _ = self.response_tx.send(ControlResponse::StateChanged(ControlState::Paused));
+                let _ = self.response_tx.send(ControlResponse::SpeedChanged(1.0));
+            }
+            StrategyCommand::RequestNewBacktest(_) => {
+                // This command is handled by GUI directly, not the controller
+                // Just acknowledge and stop current execution
+                self.should_stop.store(true, Ordering::Relaxed);
             }
         }
     }
@@ -139,13 +152,6 @@ impl StrategyController {
     pub fn mark_completed(&self) {
         self.state.store(ControlState::Completed as u64, Ordering::Relaxed);
         let _ = self.response_tx.send(ControlResponse::Completed);
-    }
-
-    /// Wait while paused, checking for commands
-    pub fn wait_while_paused(&self) {
-        while self.state() == ControlState::Paused && !self.should_stop() {
-            self.process_commands(Duration::from_millis(100));
-        }
     }
 
     /// Get clones for sharing with strategy thread

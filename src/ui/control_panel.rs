@@ -9,6 +9,9 @@ pub struct ControlPanel {
     current_state: ControlState,
     speed_multiplier: f64,
     file_paths: Vec<String>,
+    pending_file_change: bool,
+    can_start_new: bool,        // Whether a new backtest can be started
+    start_new_requested: bool,  // Flag to signal start new backtest to monitor
 }
 
 impl ControlPanel {
@@ -18,11 +21,17 @@ impl ControlPanel {
             current_state: ControlState::Paused,
             speed_multiplier: 1.0,
             file_paths: vec![initial_file],
+            pending_file_change: false,
+            can_start_new: true,
+            start_new_requested: false,
         }
     }
 
     pub fn update_state(&mut self, state: ControlState) {
         self.current_state = state;
+        if state == ControlState::Running {
+            self.pending_file_change = false;
+        }
     }
 
     pub fn update_speed(&mut self, speed: f64) {
@@ -31,30 +40,46 @@ impl ControlPanel {
 
     pub fn update_files(&mut self, files: Vec<String>) {
         self.file_paths = files;
+        self.pending_file_change = true;
+    }
+    
+    pub fn update_command_sender(&mut self, new_tx: Sender<StrategyCommand>) {
+        self.command_tx = new_tx;
+    }
+    
+    pub fn set_can_start_new(&mut self, can_start: bool) {
+        self.can_start_new = can_start;
+    }
+    
+    pub fn should_start_new_backtest(&mut self) -> bool {
+        let requested = self.start_new_requested;
+        self.start_new_requested = false;
+        requested
+    }
+    
+    /// Get all selected file paths
+    pub fn get_selected_files(&self) -> Vec<String> {
+        self.file_paths.clone()
     }
 
     fn select_files(&mut self) {
-        // Open file dialog in a separate thread to avoid blocking UI
-        let command_tx = self.command_tx.clone();
-        
-        std::thread::spawn(move || {
-            if let Some(files) = rfd::FileDialog::new()
-                .add_filter("NPZ Data Files", &["npz"])
-                .add_filter("CSV Data Files", &["csv"])
-                .add_filter("All Files", &["*"])
-                .set_title("Select Backtest Data Files (Multiple Selection Supported)")
-                .pick_files()
-            {
-                let file_paths: Vec<String> = files
-                    .iter()
-                    .filter_map(|p| p.to_str().map(|s| s.to_string()))
-                    .collect();
-                
-                if !file_paths.is_empty() {
-                    let _ = command_tx.send(StrategyCommand::ChangeFiles(file_paths));
-                }
+        if let Some(files) = rfd::FileDialog::new()
+            .add_filter("NPZ Data Files", &["npz"])
+            .add_filter("CSV Data Files", &["csv"])
+            .add_filter("All Files", &["*"])
+            .set_title("Select Backtest Data Files")
+            .pick_files()
+        {
+            let file_paths: Vec<String> = files
+                .iter()
+                .filter_map(|p| p.to_str().map(|s| s.to_string()))
+                .collect();
+            
+            if !file_paths.is_empty() {
+                self.file_paths = file_paths;
+                self.pending_file_change = true;
             }
-        });
+        }
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui) {
@@ -63,30 +88,75 @@ impl ControlPanel {
                 ui.heading("🎮 Strategy Control");
                 
                 // State indicator
-                let (color, emoji) = match self.current_state {
-                    ControlState::Running => (egui::Color32::GREEN, "▶"),
-                    ControlState::Paused => (egui::Color32::YELLOW, "⏸"),
-                    ControlState::Stopped => (egui::Color32::RED, "⏹"),
-                    ControlState::Completed => (egui::Color32::BLUE, "✓"),
+                let (color, emoji, status_text) = match self.current_state {
+                    ControlState::Running => (egui::Color32::GREEN, "▶", "Running"),
+                    ControlState::Paused => (egui::Color32::YELLOW, "⏸", "Paused"),
+                    ControlState::Stopped => (egui::Color32::RED, "⏹", "Stopped"),
+                    ControlState::Completed => (egui::Color32::LIGHT_BLUE, "✓", "Completed"),
                 };
                 
                 ui.label(
-                    egui::RichText::new(format!("{} {}", emoji, self.current_state))
+                    egui::RichText::new(format!("{} {}", emoji, status_text))
                         .color(color)
                         .strong()
                 );
             });
             
+            // Show hint when can start new backtest
+            if self.can_start_new && matches!(self.current_state, ControlState::Stopped | ControlState::Completed | ControlState::Paused) {
+                if self.current_state == ControlState::Paused && self.pending_file_change {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("📋 New files selected. Click 'Start New' to begin.")
+                                .small()
+                                .color(egui::Color32::GOLD)
+                        );
+                    });
+                } else if matches!(self.current_state, ControlState::Stopped | ControlState::Completed) {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("✅ Ready for new backtest. Select files and click 'Start New'.")
+                                .small()
+                                .color(egui::Color32::LIGHT_GREEN)
+                        );
+                    });
+                }
+            }
+            
             ui.separator();
             
-            // Control buttons
+            // Control buttons with improved logic
             ui.horizontal(|ui| {
-                let can_start = matches!(self.current_state, ControlState::Paused | ControlState::Stopped);
+                // Start New: Available when can_start_new and (Stopped/Completed, or Paused with pending files)
+                let can_start_new = self.can_start_new && (
+                    matches!(self.current_state, ControlState::Stopped | ControlState::Completed) ||
+                    (self.current_state == ControlState::Paused && self.pending_file_change)
+                );
+                
+                // Resume: Only when Paused and no pending file change
+                let can_resume = self.current_state == ControlState::Paused && !self.pending_file_change;
+                
+                // Pause: Only when Running
                 let can_pause = self.current_state == ControlState::Running;
-                let can_stop = !matches!(self.current_state, ControlState::Stopped | ControlState::Completed);
+                
+                // Stop: When Running or Paused
+                let can_stop = matches!(
+                    self.current_state, 
+                    ControlState::Running | ControlState::Paused
+                );
+                
+                // Skip: Only when Running and multiple files
                 let can_skip = self.current_state == ControlState::Running && self.file_paths.len() > 1;
                 
-                if ui.add_enabled(can_start, egui::Button::new("▶ Start")).clicked() {
+                // Start New button - spawn new thread
+                if ui.add_enabled(can_start_new, egui::Button::new("🚀 Start New")).clicked() {
+                    self.start_new_requested = true;
+                    self.pending_file_change = false;
+                    self.current_state = ControlState::Running; // Optimistic update
+                }
+                
+                // Resume button
+                if ui.add_enabled(can_resume, egui::Button::new("▶ Resume")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::Start);
                 }
                 
@@ -98,34 +168,35 @@ impl ControlPanel {
                     let _ = self.command_tx.send(StrategyCommand::Stop);
                 }
                 
-                if ui.add_enabled(can_skip, egui::Button::new("⏭️ Skip")).clicked() {
+                if ui.add_enabled(can_skip, egui::Button::new("⏭ Skip")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::Skip);
-                }
-                
-                if ui.button("🔄 Reset").clicked() {
-                    let _ = self.command_tx.send(StrategyCommand::Reset);
                 }
             });
             
             ui.separator();
             
-            // Speed control
+            // Speed control - only enabled when Running or Paused
+            let speed_enabled = matches!(
+                self.current_state, 
+                ControlState::Running | ControlState::Paused
+            );
+            
             ui.horizontal(|ui| {
                 ui.label("⚡ Speed:");
                 
-                if ui.button("0.1x").clicked() {
+                if ui.add_enabled(speed_enabled, egui::Button::new("0.1x")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::SetSpeed(0.1));
                 }
-                if ui.button("0.5x").clicked() {
+                if ui.add_enabled(speed_enabled, egui::Button::new("0.5x")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::SetSpeed(0.5));
                 }
-                if ui.button("1x").clicked() {
+                if ui.add_enabled(speed_enabled, egui::Button::new("1x")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::SetSpeed(1.0));
                 }
-                if ui.button("2x").clicked() {
+                if ui.add_enabled(speed_enabled, egui::Button::new("2x")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::SetSpeed(2.0));
                 }
-                if ui.button("10x").clicked() {
+                if ui.add_enabled(speed_enabled, egui::Button::new("10x")).clicked() {
                     let _ = self.command_tx.send(StrategyCommand::SetSpeed(10.0));
                 }
                 
@@ -135,26 +206,42 @@ impl ControlPanel {
             ui.separator();
             
             // Custom speed slider
-            ui.horizontal(|ui| {
-                ui.label("Custom Speed:");
-                let mut temp_speed = self.speed_multiplier;
-                if ui.add(
-                    egui::Slider::new(&mut temp_speed, 0.01..=100.0)
-                        .logarithmic(true)
-                        .text("x")
-                ).changed() {
-                    let _ = self.command_tx.send(StrategyCommand::SetSpeed(temp_speed));
-                }
+            ui.add_enabled_ui(speed_enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Custom Speed:");
+                    let mut temp_speed = self.speed_multiplier;
+                    if ui.add(
+                        egui::Slider::new(&mut temp_speed, 0.01..=100.0)
+                            .logarithmic(true)
+                            .text("x")
+                    ).changed() {
+                        let _ = self.command_tx.send(StrategyCommand::SetSpeed(temp_speed));
+                    }
+                });
             });
             
             ui.separator();
             
-            // File selection and info
+            // File selection - only enabled when not Running
+            let file_select_enabled = self.current_state != ControlState::Running;
+            
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label("📁 Data Files:");
-                    if ui.button("📂 Select Files...").clicked() {
+                    
+                    if ui.add_enabled(
+                        file_select_enabled, 
+                        egui::Button::new("📂 Select Files...")
+                    ).clicked() {
                         self.select_files();
+                    }
+                    
+                    if !file_select_enabled {
+                        ui.label(
+                            egui::RichText::new("(Pause to change)")
+                                .small()
+                                .weak()
+                        );
                     }
                 });
                 
@@ -188,6 +275,15 @@ impl ControlPanel {
                                 .weak()
                         );
                     });
+                }
+                
+                // Show restart hint for file change
+                if self.pending_file_change && !file_select_enabled {
+                    ui.label(
+                        egui::RichText::new("⚠ Pause or Stop to apply file changes")
+                            .small()
+                            .color(egui::Color32::GOLD)
+                    );
                 }
             });
         });

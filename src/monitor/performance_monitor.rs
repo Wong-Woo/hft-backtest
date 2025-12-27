@@ -149,8 +149,13 @@ impl PerformanceMonitor {
         }
     }
 
-    fn render_equity_chart(&self, ui: &mut egui::Ui) {
-        ui.heading("Equity Curve");
+    fn render_equity_chart_sized(&self, ui: &mut egui::Ui, width: f32) {
+        ui.label(egui::RichText::new("Equity Curve").strong().size(14.0));
+        
+        if self.equity_history.is_empty() {
+            ui.add_sized([width, 180.0], egui::Label::new("No data available"));
+            return;
+        }
         
         let points: PlotPoints = self.equity_history.iter()
             .map(|(t, v)| [*t, *v])
@@ -158,7 +163,9 @@ impl PerformanceMonitor {
         
         Plot::new("equity_plot")
             .legend(Legend::default().position(Corner::LeftTop))
-            .height(200.0)
+            .height(180.0)
+            .width(width)
+            .show_axes([true, true])
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(points)
@@ -185,8 +192,13 @@ impl PerformanceMonitor {
             });
     }
 
-    fn render_pnl_chart(&self, ui: &mut egui::Ui) {
-        ui.heading("PnL");
+    fn render_pnl_chart_sized(&self, ui: &mut egui::Ui, width: f32) {
+        ui.label(egui::RichText::new("PnL").strong().size(14.0));
+        
+        if self.pnl_history.is_empty() {
+            ui.add_sized([width, 180.0], egui::Label::new("No data available"));
+            return;
+        }
         
         let points: PlotPoints = self.pnl_history.iter()
             .map(|(t, v)| [*t, *v])
@@ -194,7 +206,9 @@ impl PerformanceMonitor {
         
         Plot::new("pnl_plot")
             .legend(Legend::default().position(Corner::LeftTop))
-            .height(200.0)
+            .height(180.0)
+            .width(width)
+            .show_axes([true, true])
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(points)
@@ -220,8 +234,13 @@ impl PerformanceMonitor {
             });
     }
 
-    fn render_position_chart(&self, ui: &mut egui::Ui) {
-        ui.heading("Position");
+    fn render_position_chart_sized(&self, ui: &mut egui::Ui, width: f32) {
+        ui.label(egui::RichText::new("Position").strong().size(14.0));
+        
+        if self.position_history.is_empty() {
+            ui.add_sized([width, 180.0], egui::Label::new("No data available"));
+            return;
+        }
         
         let points: PlotPoints = self.position_history.iter()
             .map(|(t, v)| [*t, *v])
@@ -229,7 +248,9 @@ impl PerformanceMonitor {
         
         Plot::new("position_plot")
             .legend(Legend::default().position(Corner::LeftTop))
-            .height(150.0)
+            .height(180.0)
+            .width(width)
+            .show_axes([true, true])
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(points)
@@ -255,8 +276,13 @@ impl PerformanceMonitor {
             });
     }
 
-    fn render_price_chart(&self, ui: &mut egui::Ui) {
-        ui.heading("Mid Price");
+    fn render_price_chart_sized(&self, ui: &mut egui::Ui, width: f32) {
+        ui.label(egui::RichText::new("Mid Price").strong().size(14.0));
+        
+        if self.price_history.is_empty() {
+            ui.add_sized([width, 180.0], egui::Label::new("No data available"));
+            return;
+        }
         
         let points: PlotPoints = self.price_history.iter()
             .map(|(t, v)| [*t, *v])
@@ -264,7 +290,9 @@ impl PerformanceMonitor {
         
         Plot::new("price_plot")
             .legend(Legend::default().position(Corner::LeftTop))
-            .height(150.0)
+            .height(180.0)
+            .width(width)
+            .show_axes([true, true])
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(points)
@@ -341,28 +369,45 @@ impl eframe::App for PerformanceMonitor {
         
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                // Statistics panel
-                self.render_stats(ui);
+                let available_width = ui.available_width();
+                let margin = 20.0;
+                let content_width = available_width - margin * 2.0;
+                let chart_spacing = 15.0;
+                let chart_width = (content_width - chart_spacing) / 2.0;
                 
-                ui.separator();
-                
-                // Equity chart
-                self.render_equity_chart(ui);
-                
-                ui.separator();
-                
-                // PnL chart
-                self.render_pnl_chart(ui);
-                
-                ui.separator();
-                
-                // Position chart
-                self.render_position_chart(ui);
-                
-                ui.separator();
-                
-                // Price chart
-                self.render_price_chart(ui);
+                egui::Frame::none()
+                    .inner_margin(egui::Margin::symmetric(margin, 0.0))
+                    .show(ui, |ui| {
+                        // Statistics panel
+                        self.render_stats(ui);
+                        
+                        ui.add_space(15.0);
+                        ui.separator();
+                        ui.add_space(15.0);
+                        
+                        // Charts in 2-column layout
+                        ui.columns(2, |columns| {
+                            columns[0].vertical(|ui| {
+                                self.render_equity_chart_sized(ui, chart_width);
+                            });
+                            columns[1].vertical(|ui| {
+                                self.render_pnl_chart_sized(ui, chart_width);
+                            });
+                        });
+                        
+                        ui.add_space(chart_spacing);
+                        
+                        ui.columns(2, |columns| {
+                            columns[0].vertical(|ui| {
+                                self.render_position_chart_sized(ui, chart_width);
+                            });
+                            columns[1].vertical(|ui| {
+                                self.render_price_chart_sized(ui, chart_width);
+                            });
+                        });
+                        
+                        ui.add_space(20.0);
+                    });
             });
         });
     }
