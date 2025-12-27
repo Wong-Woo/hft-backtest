@@ -16,8 +16,6 @@ use crate::ui::PerformanceData;
 use crate::controller::StrategyController;
 use super::{Strategy, StrategyState, TickContext, build_performance_data, extract_orderbook};
 
-/// Generic runner that handles all boilerplate for any Strategy implementation
-#[allow(dead_code)]
 pub struct StrategyRunner<S: Strategy> {
     strategy: S,
     data_files: Vec<PathBuf>,
@@ -213,7 +211,6 @@ impl<S: Strategy> StrategyRunner<S> {
     }
 }
 
-#[allow(dead_code)]
 fn calculate_speed_params(speed: f64) -> (usize, u64) {
     if speed >= 100.0 {
         (100, 0)
@@ -226,7 +223,6 @@ fn calculate_speed_params(speed: f64) -> (usize, u64) {
     }
 }
 
-#[allow(dead_code)]
 fn create_backtest(data_file: &str) -> Result<Backtest<HashMapMarketDepth>> {
     let asset = L2AssetBuilder::new()
         .data(vec![DataSource::File(data_file.to_string())])
